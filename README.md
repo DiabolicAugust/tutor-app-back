@@ -18,7 +18,7 @@ cp .env.example .env        # then set DATABASE_URL and JWT_SECRET
 # A throwaway database, if you do not have one:
 docker run --name fox-db -e POSTGRES_PASSWORD=fox -p 5432:5432 -d postgres:17
 
-npm run db:migrate          # creates the schema
+npm run db:deploy           # applies the migrations in prisma/migrations
 npm run db:seed             # demo school, tutors, students, lessons, notifications
 npm run start:dev
 ```
@@ -38,6 +38,23 @@ the password for both is `password123`.
 | `npm run db:deploy` | Apply pending migrations (CI, production) |
 | `npm run db:seed` | Reset and reseed the demo school |
 | `npm run db:studio` | Prisma Studio |
+| `npm run test:all` | Unit tests, then the integration suite |
+| `npm run db:test:up` | Throwaway Postgres for the tests, on port 55432 |
+
+## Migrations
+
+`prisma/migrations` holds the schema's history, starting with `20260823000000_init`. Apply
+them with `npm run db:deploy`; author a new one with `npm run db:migrate` after editing
+`schema.prisma`.
+
+The integration suite applies them too, rather than pushing the schema directly, so every
+test run is also a test that the migrations apply cleanly to an empty database — the
+alternative leaves them unexercised until a deploy, which is the worst moment to discover
+one of them does not apply.
+
+That means a test database created before the migrations existed has the tables but no
+migration history, and the suite will refuse it. `npm run db:test:down && npm run db:test:up`
+starts a clean one.
 
 ## Prisma 7 notes
 
@@ -80,7 +97,7 @@ Getting a database:
 
 ```bash
 npm run db:test:up      # throwaway Postgres on port 55432
-npm run test:e2e        # syncs the schema, then runs
+npm run test:e2e        # applies the migrations, then runs
 npm run db:test:down
 ```
 
