@@ -207,12 +207,34 @@ fetch and a cast rather than a mapping layer:
 | POST | `/api/invitations/token/:token/accept` | public — creates the account, returns a session |
 | GET | `/api/notifications` | recipient |
 | POST | `/api/notifications/:id/read`, `/read-all` | recipient |
+| GET | `/api/students/:id/lessons` | owner or admin — history, newest first |
+| GET · POST | `/api/students/:id/notes` | owner or admin |
+| GET · POST | `/api/lessons/:id/notes` | owner or admin |
+| DELETE | `/api/notes/:id` | author or admin |
+| GET · POST | `/api/students/:id/files` | owner or admin (POST is multipart, field `file`) |
+| GET | `/api/files/:id` | owner or admin — streamed as an attachment |
+| DELETE | `/api/files/:id` | uploader or admin |
 
 **Lesson reminders are not stored here.** The app derives "did this take place?" and
 "starting soon" from the schedule it already has. A derived reminder cannot go stale; a
 stored one would need retracting the moment the lesson is confirmed. Only genuinely
 server-authored kinds live in the `notifications` table — announcements, a new colleague,
 a payment running low.
+
+### Notes
+
+Notes are one table for two subjects: a note about a student in general, and a note about
+one lesson. `Note` carries `studentId` **or** `lessonId`, never both — Prisma cannot express
+that, so `NotesService` enforces it. Two near-identical tables would have meant two
+endpoints, two clients and two components for one idea, and they would have drifted.
+
+A lesson note deliberately does not also record the student. The lesson already knows whose
+it is; a second copy is a second thing to keep true. It also means a student's notes and a
+lesson's notes stay genuinely separate, which is how the app shows them.
+
+Neither needs a capability. Writing something down is part of teaching, not administration —
+what is gated is reaching the student or lesson at all, and `StudentsService.findOne` already
+decides that. Only the author, or an admin, may remove a note.
 
 ## Invitations
 
@@ -248,9 +270,26 @@ Two consequences worth keeping:
 - `User.avatarFileId` and `School.logoFileId` are real foreign keys with `SetNull`, so
   deleting a file that is still referenced is a database error rather than a broken image.
 
-`purpose` (`AVATAR`, `SCHOOL_LOGO`, `LESSON_ATTACHMENT`, `OTHER`) is what will drive size
-limits and retention, and stops a lesson attachment being served as somebody's avatar.
-**Upload endpoints are not built yet** — this is the schema they will write into.
+`purpose` (`AVATAR`, `SCHOOL_LOGO`, `LESSON_ATTACHMENT`, `STUDENT_ATTACHMENT`, `OTHER`)
+drives size limits and retention, and stops a lesson attachment being served as somebody's
+avatar.
+
+Files go through `StorageService`, a seam like `MailService`: the local disk is what a single
+server needs, and object storage is a different implementation of four methods rather than a
+change anywhere else. `UPLOADS_DIR` says where; `MAX_UPLOAD_MB` bounds how much one request
+can cost.
+
+The row is written **before** the bytes and finalised after, which is what `uploadedAt` is
+for. If writing the bytes fails, what remains is a row with no `uploadedAt` — a record that
+something was attempted, which can be found and cleared. The other order leaves bytes on
+disk that nothing in the database knows about, and nothing can find those.
+
+Types are an allow-list. The set of dangerous types grows over time and the set of useful
+ones does not, so guessing wrong on an allow-list costs somebody an upload while guessing
+wrong on a deny-list costs everybody. Downloads are `Content-Disposition: attachment` for
+the same reason: these are files from outside the team, and rendering one in the browser's
+own origin is how a stored file becomes a script that runs.
+
 
 ## Seed data
 

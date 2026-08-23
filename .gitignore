@@ -11,5 +11,8 @@ node_modules
 # Generated Prisma client — run `npm run db:generate` after cloning
 /generated/prisma
 
+# Uploaded files. The record of truth is the database; these are the bytes.
+/uploads
+
 # Test artefacts
 /coverage

@@ -12,6 +12,8 @@ import type { UpdateLessonStatusDto } from './dto/update-lesson-status.dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_DAYS = 30;
+/** Enough history to be useful, bounded so a long-standing student stays fast. */
+const HISTORY_LIMIT = 100;
 
 @Injectable()
 export class LessonsService {
@@ -51,6 +53,28 @@ export class LessonsService {
       },
       orderBy: { startsAt: 'asc' },
       include: { student: { select: { id: true, name: true } } },
+    });
+  }
+
+  /**
+   * One student's lessons, newest first.
+   *
+   * A separate query from the calendar's rather than another filter on it: the
+   * calendar always asks "what is in this window", while a student's page asks
+   * "what has happened", and the two want opposite orderings and opposite
+   * defaults. `findOne` proves the caller may see the student, which is also what
+   * decides whether they may see these lessons.
+   */
+  async findForStudent(user: User, studentId: string, limit = HISTORY_LIMIT) {
+    const student = await this.students.findOne(user, studentId);
+
+    return this.prisma.lesson.findMany({
+      where: { studentId: student.id },
+      orderBy: { startsAt: 'desc' },
+      take: limit,
+      // The count is what the app shows without opening a lesson: whether
+      // anybody wrote anything down.
+      include: { _count: { select: { notes: true } } },
     });
   }
 

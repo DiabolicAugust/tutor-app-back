@@ -3,10 +3,12 @@ import { Module } from '@nestjs/common';
 import { AddonsModule } from './addons/addons.module';
 import { AuthModule } from './auth/auth.module';
 import { AppConfigModule } from './config/config.module';
+import { FilesModule } from './files/files.module';
 import { HealthController } from './health.controller';
 import { InvitationsModule } from './invitations/invitations.module';
 import { LessonsModule } from './lessons/lessons.module';
 import { MailModule } from './mail/mail.module';
+import { NotesModule } from './notes/notes.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { SchoolsModule } from './schools/schools.module';
@@ -35,6 +37,8 @@ import { UsersModule } from './users/users.module';
     StudentsModule,
     LessonsModule,
     NotificationsModule,
+    NotesModule,
+    FilesModule,
     SupportModule,
   ],
   controllers: [HealthController],

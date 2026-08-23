@@ -1,3 +1,6 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 /**
  * Environment for the integration suite, applied before Nest reads it.
  *
@@ -9,6 +12,17 @@
  */
 const FALLBACK_DATABASE_URL =
   'postgresql://postgres:fox@localhost:55432/foxacademy_test?schema=public';
+
+/**
+ * Where uploads land during a test run.
+ *
+ * A temporary directory, and set **here** rather than in a `beforeAll`:
+ * `ConfigModule.forRoot()` reads the environment when the module is first
+ * imported, which happens before any hook in a spec file runs. Setting it later
+ * silently has no effect, and the uploads go to the default `./uploads` inside
+ * the repository — which is how this was found.
+ */
+export const TEST_UPLOADS_DIR = join(tmpdir(), 'foxacademy-test-uploads');
 
 export function applyTestEnv(): void {
   process.env.NODE_ENV = 'test';
@@ -26,6 +40,7 @@ export function applyTestEnv(): void {
   process.env.INVITE_TTL_HOURS = '72';
   process.env.SUPPORT_EMAIL = 'support@example.test';
   process.env.CORS_ORIGINS = '*';
+  process.env.UPLOADS_DIR = TEST_UPLOADS_DIR;
 }
 
 /**

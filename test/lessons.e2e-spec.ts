@@ -432,4 +432,142 @@ describe('Lessons', () => {
         .expect(400);
     });
   });
+
+  describe("a student's history", () => {
+    it('reads newest first, the opposite of the calendar', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-7),
+        subject: 'Older',
+      });
+      await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-1),
+        subject: 'Recent',
+      });
+
+      const response = await request(test.server)
+        .get(`/api/students/${student.id}/lessons`)
+        .set(await authHeader(test, tutor))
+        .expect(200);
+
+      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
+        'Recent',
+        'Older',
+      ]);
+    });
+
+    it('includes lessons already past, which a date window would have dropped', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      await makeLesson(test, { school, tutor, student, startsAt: at(-90) });
+
+      const response = await request(test.server)
+        .get(`/api/students/${student.id}/lessons`)
+        .set(await authHeader(test, tutor))
+        .expect(200);
+
+      expect(response.body).toHaveLength(1);
+    });
+
+    it('says whether each lesson happened, and whether anybody wrote it up', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      const lesson = await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-1),
+      });
+      const header = await authHeader(test, tutor);
+
+      await request(test.server)
+        .patch(`/api/lessons/${lesson.id}/status`)
+        .set(header)
+        .send({ status: LessonStatus.COMPLETED })
+        .expect(200);
+      await request(test.server)
+        .post(`/api/lessons/${lesson.id}/notes`)
+        .set(header)
+        .send({ text: 'Went well' })
+        .expect(201);
+
+      const response = await request(test.server)
+        .get(`/api/students/${student.id}/lessons`)
+        .set(header)
+        .expect(200);
+
+      // The count is what the list shows without opening anything.
+      expect(response.body[0]).toMatchObject({
+        status: LessonStatus.COMPLETED,
+        _count: { notes: 1 },
+      });
+    });
+
+    it("holds only that student's lessons", async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      const other = await makeStudent(test, { school, tutor });
+      await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-1),
+        subject: 'Theirs',
+      });
+      await makeLesson(test, {
+        school,
+        tutor,
+        student: other,
+        startsAt: at(-1),
+        subject: 'Other',
+      });
+
+      const response = await request(test.server)
+        .get(`/api/students/${student.id}/lessons`)
+        .set(await authHeader(test, tutor))
+        .expect(200);
+
+      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
+        'Theirs',
+      ]);
+    });
+
+    it("is refused for a colleague's student", async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const colleague = await makeUser(test, { school });
+      const theirs = await makeStudent(test, { school, tutor: colleague });
+
+      await request(test.server)
+        .get(`/api/students/${theirs.id}/lessons`)
+        .set(await authHeader(test, tutor))
+        .expect(403);
+    });
+
+    it('is open to an admin for anybody in their school', async () => {
+      const school = await makeSchool(test);
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      await makeLesson(test, { school, tutor, student, startsAt: at(-1) });
+
+      const response = await request(test.server)
+        .get(`/api/students/${student.id}/lessons`)
+        .set(await authHeader(test, admin))
+        .expect(200);
+
+      expect(response.body).toHaveLength(1);
+    });
+  });
 });

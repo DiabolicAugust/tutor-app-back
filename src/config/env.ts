@@ -33,6 +33,22 @@ const envSchema = z.object({
   INVITE_TTL_HOURS: z.coerce.number().int().positive().default(72),
   /** Where support requests are forwarded once a mail provider exists. */
   SUPPORT_EMAIL: z.string().email().default('support@foxacademy.dev'),
+  /**
+   * Where uploaded files are kept.
+   *
+   * A directory because that is what a single server needs, and object storage
+   * is a different implementation of the same seam rather than a different
+   * shape of configuration — see `storage.service.ts`.
+   */
+  UPLOADS_DIR: z.string().default('./uploads'),
+  /**
+   * Largest accepted upload.
+   *
+   * A limit rather than none: without one, a single request decides how much
+   * disk the server has, and the failure arrives as a full volume rather than a
+   * rejected request.
+   */
+  MAX_UPLOAD_MB: z.coerce.number().int().positive().max(100).default(10),
 });
 
 export type Env = z.infer<typeof envSchema>;

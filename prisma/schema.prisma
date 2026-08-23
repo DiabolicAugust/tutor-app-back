@@ -98,6 +98,7 @@ model User {
   config Json @default("{}")
 
   supportRequests SupportRequest[] @relation("SupportRequester")
+  notesWritten    Note[]           @relation("NoteAuthor")
 
   @@index([schoolId])
   @@map("users")
@@ -123,6 +124,9 @@ model Student {
   tutor   User   @relation("StudentTutor", fields: [tutorId], references: [id], onDelete: Cascade)
 
   lessons Lesson[]
+  notes   Note[]
+  /// Documents kept against the student — a contract, a report, a worksheet.
+  files   File[]
 
   @@index([schoolId])
   @@index([tutorId])
@@ -153,10 +157,48 @@ model Lesson {
   studentId String
   student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
+  notes Note[]
+
   /// Range queries by calendar owner are the calendar's only read pattern.
   @@index([tutorId, startsAt])
   @@index([schoolId, startsAt])
   @@map("lessons")
+}
+
+/// Something a tutor wrote down — about a student in general, or about one
+/// lesson in particular.
+///
+/// **Exactly one of `studentId` and `lessonId` is set.** Prisma cannot express
+/// that, so `NotesService` enforces it; the alternative — two near-identical
+/// tables — would mean two endpoints, two clients and two components for one
+/// idea, and they would drift.
+///
+/// A lesson note deliberately does not also carry the student: the lesson
+/// already knows whose it is, and a second copy is a second thing to keep true.
+///
+/// No `schoolId` either, unlike most rows here. Every read and write goes
+/// through the parent student or lesson, whose ownership has already been
+/// proven — a school on the note would be a second answer to "whose is this"
+/// that can disagree with the first.
+model Note {
+  id        String   @id @default(cuid())
+  text      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Who wrote it. Shown in the app, because a school has more than one tutor.
+  authorId String
+  author   User   @relation("NoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  lessonId String?
+  lesson   Lesson? @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([studentId, createdAt])
+  @@index([lessonId, createdAt])
+  @@map("notes")
 }
 
 /// Kinds a server actually sends. The app derives lesson reminders itself from
@@ -190,6 +232,8 @@ enum FilePurpose {
   AVATAR
   SCHOOL_LOGO
   LESSON_ATTACHMENT
+  /// A document kept against a student: a contract, a report, a worksheet.
+  STUDENT_ATTACHMENT
   OTHER
 }
 
@@ -220,12 +264,18 @@ model File {
   uploadedById String
   uploadedBy   User   @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: Cascade)
 
+  /// Set for a `STUDENT_ATTACHMENT`. Null for anything else, which is why it is
+  /// optional rather than a second table.
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
   /// Back-references from the rows that point at this file, so deleting a file
   /// that is still in use is a database error rather than a broken image.
   avatarOf User[]   @relation("UserAvatar")
   logoOf   School[] @relation("SchoolLogo")
 
   @@index([schoolId, purpose])
+  @@index([studentId])
   @@map("files")
 }
 

@@ -213,6 +213,34 @@ async function main(): Promise<void> {
     ],
   });
 
+  // Notes on a student and on one lesson, so the two kinds are visibly different
+  // things in the app rather than a feature that has to be taken on trust.
+  const petro = byName('Petro Melnyk');
+  const endedLesson = await prisma.lesson.findFirstOrThrow({
+    where: { studentId: petro.id },
+    orderBy: { startsAt: 'asc' },
+  });
+
+  await prisma.note.createMany({
+    data: [
+      {
+        text: 'Prefers morning lessons. Mother handles scheduling.',
+        studentId: petro.id,
+        authorId: anna.id,
+      },
+      {
+        text: 'Paid for the next block in cash on the 3rd.',
+        studentId: petro.id,
+        authorId: anna.id,
+      },
+      {
+        text: 'Factoring is still shaky — start the next lesson with a recap.',
+        lessonId: endedLesson.id,
+        authorId: anna.id,
+      },
+    ],
+  });
+
   console.log(`Seeded ${DEMO_SCHOOL_ID}. Password for every account: ${TUTOR_PASSWORD}`);
   console.log(`  tutor: ${anna.email}`);
   console.log(`  admin: ${admin.email}`);
