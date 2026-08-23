@@ -1,0 +1,80 @@
+# Tests run on every push to main and on every pull request aimed at it.
+#
+# Against a real Postgres, not a mock: most of what this backend enforces is a
+# `where` clause — tenant isolation, ownership, the capability join — and a mock
+# database would confirm the wrong query just as happily as the right one.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push to the same branch cancels the first: the older run is answering
+# a question nobody is asking any more.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck, lint, build and test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: foxacademy_test
+        ports:
+          - 5432:5432
+        # Without the health check the first query races the server's startup,
+        # which fails perhaps one run in five and looks like a flaky test.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The suite refuses any database whose name does not say "test", so this
+      # name is load-bearing rather than decorative.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/foxacademy_test?schema=public
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/foxacademy_test?schema=public
+      JWT_SECRET: ci-only-secret-at-least-thirty-two-characters
+      MAIL_TRANSPORT: log
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Before anything else: the client is generated code, and every other step
+      # imports it.
+      - name: Generate the Prisma client
+        run: npm run db:generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint:ci
+
+      # A build failure and a test failure are different problems, so they get
+      # different steps.
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Integration tests
+        run: npm run test:e2e

@@ -1,0 +1,15 @@
+node_modules
+
+# Keep environment variables out of version control
+.env
+.env.local
+
+# Compiled output
+/dist
+*.tsbuildinfo
+
+# Generated Prisma client — run `npm run db:generate` after cloning
+/generated/prisma
+
+# Test artefacts
+/coverage

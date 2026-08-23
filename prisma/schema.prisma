@@ -1,0 +1,332 @@
+// Domain model for the Fox Academy backend.
+//
+// Mirrors the shapes the mobile app already renders (see its `src/shared`
+// folders): a tutor's calendar of lessons, the students those lessons are for,
+// and the notifications that fall out of both. Where the app currently holds
+// fixtures, this is the thing that will replace them — so field names are kept
+// deliberately identical to the app's types.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+  // The rest of this project compiles to CommonJS, and the generator defaults to
+  // ESM: without this the emitted client carries `import.meta`, which makes Node
+  // treat the compiled file as a module and fail on `exports is not defined`
+  // before the server finishes starting.
+  moduleFormat = "cjs"
+  // Extensionless relative imports, because the emitted client is CommonJS: the
+  // default `.js` suffixes are an ESM requirement that only TypeScript's own
+  // resolver understands, and every other tool reading these files — Jest's
+  // resolver among them — looks for a `.js` that was never emitted.
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A tutoring business. Every other row belongs to exactly one, so tenant
+/// isolation is a single `where` clause rather than a convention.
+model School {
+  id        String   @id @default(cuid())
+  name      String
+  /// Human-readable identifier for invite links and, later, subdomains. A cuid
+  /// is fine for a foreign key and useless in a URL somebody has to type.
+  slug      String   @unique
+  /// IANA zone the school schedules in. Lesson times are meaningless without
+  /// one as soon as there is a second school in another country.
+  timezone  String   @default("UTC")
+  /// Independent tutors get a school of their own; the app shows no difference.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users       User[]
+  students    Student[]
+  lessons     Lesson[]
+  files       File[]
+  invitations Invitation[]
+
+  /// Optional branding, shown in the app's header for school accounts.
+  logoFileId String?
+  logo       File?   @relation("SchoolLogo", fields: [logoFileId], references: [id], onDelete: SetNull)
+
+  @@map("schools")
+}
+
+/// Two roles, because there are two jobs: a tutor teaches, an admin runs the
+/// school. Students are records owned by a tutor, not accounts that sign in, so
+/// they are deliberately not a role.
+enum UserRole {
+  TUTOR
+  ADMIN
+}
+
+/// An identity that can sign in. Matches the app's `AuthUser`.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  /// Argon/bcrypt hash. Never leaves the auth module.
+  passwordHash String
+  name         String
+  role         UserRole @default(TUTOR)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// Lessons this user teaches — the "whose calendar" axis in the app.
+  lessonsTaught   Lesson[]       @relation("LessonTutor")
+  /// Students this user teaches.
+  students        Student[]      @relation("StudentTutor")
+  notifications   Notification[]
+  uploadedFiles   File[]         @relation("FileUploader")
+  sentInvitations Invitation[]   @relation("InvitationSender")
+  addons          UserAddon[]    @relation("UserAddons")
+  addonsGranted   UserAddon[]    @relation("AddonGranter")
+
+  avatarFileId String?
+  avatar       File?   @relation("UserAvatar", fields: [avatarFileId], references: [id], onDelete: SetNull)
+
+  /// Per-user preferences — notification timing and anything similar that
+  /// follows the account rather than the device.
+  ///
+  /// A column on the user rather than a table: it is always read with the user,
+  /// never queried on its own, and a table would mean a join on every session.
+  /// Untyped here and validated in `users/user-config.ts`, so adding a
+  /// preference needs no migration.
+  config Json @default("{}")
+
+  supportRequests SupportRequest[] @relation("SupportRequester")
+
+  @@index([schoolId])
+  @@map("users")
+}
+
+/// Someone being taught. An entity rather than a name on a lesson, because they
+/// have a balance and a history.
+model Student {
+  id              String   @id @default(cuid())
+  name            String
+  /// What they usually study; prefills the subject when booking.
+  subject         String
+  /// Lessons remaining on the current package. Drives payment reminders.
+  paidLessonsLeft Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// The tutor who teaches them; the app books only for its own students.
+  tutorId String
+  tutor   User   @relation("StudentTutor", fields: [tutorId], references: [id], onDelete: Cascade)
+
+  lessons Lesson[]
+
+  @@index([schoolId])
+  @@index([tutorId])
+  @@map("students")
+}
+
+enum LessonStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+}
+
+model Lesson {
+  id              String       @id @default(cuid())
+  subject         String
+  startsAt        DateTime
+  durationMinutes Int
+  status          LessonStatus @default(SCHEDULED)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  tutorId String
+  tutor   User   @relation("LessonTutor", fields: [tutorId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  /// Range queries by calendar owner are the calendar's only read pattern.
+  @@index([tutorId, startsAt])
+  @@index([schoolId, startsAt])
+  @@map("lessons")
+}
+
+/// Kinds a server actually sends. The app derives lesson reminders itself from
+/// the schedule, so those are deliberately absent here.
+enum NotificationKind {
+  ADMIN_ANNOUNCEMENT
+  TUTOR_JOINED
+  PAYMENT_RUNNING_OUT
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  kind      NotificationKind
+  /// Interpolation values for the kind's message: studentName, personName,
+  /// count, text. Untyped on purpose — the app's registry owns the copy, and a
+  /// column per kind would grow with every new one.
+  data      Json             @default("{}")
+  createdAt DateTime         @default(now())
+  readAt    DateTime?
+
+  recipientId String
+  recipient   User   @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, createdAt])
+  @@map("notifications")
+}
+
+/// What an upload is for. Drives validation limits and retention, and keeps a
+/// lesson attachment from being served as somebody's avatar.
+enum FilePurpose {
+  AVATAR
+  SCHOOL_LOGO
+  LESSON_ATTACHMENT
+  OTHER
+}
+
+/// One row per uploaded file, always.
+///
+/// Storage holds bytes and nothing else — it cannot tell you who uploaded a
+/// file, which school it belongs to, or whether it is still referenced. This
+/// table is the record of truth; `storageKey` is the only thing the storage
+/// backend knows about. Rows are created before the upload completes and
+/// finalised after, so an interrupted upload leaves a row that can be cleaned
+/// up rather than an orphaned object nobody knows exists.
+model File {
+  id           String      @id @default(cuid())
+  /// Path or object key in the storage backend. Unique so two rows can never
+  /// claim the same bytes.
+  storageKey   String      @unique
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  purpose      FilePurpose @default(OTHER)
+  /// Null until the upload is confirmed; unconfirmed rows are collectable.
+  uploadedAt   DateTime?
+  createdAt    DateTime    @default(now())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User   @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  /// Back-references from the rows that point at this file, so deleting a file
+  /// that is still in use is a database error rather than a broken image.
+  avatarOf User[]   @relation("UserAvatar")
+  logoOf   School[] @relation("SchoolLogo")
+
+  @@index([schoolId, purpose])
+  @@map("files")
+}
+
+/// An invitation for someone to join a school as a tutor.
+///
+/// Kept as a row rather than a signed stateless token so it can be revoked,
+/// listed by the admin who sent it, and marked used exactly once.
+model Invitation {
+  id         String    @id @default(cuid())
+  /// Who it was sent to. Not a foreign key: the point is that no account exists.
+  email      String
+  /// Random secret carried in the emailed link.
+  token      String    @unique
+  role       UserRole  @default(TUTOR)
+  expiresAt  DateTime
+  /// Set when the invitation is redeemed; a second attempt is then rejected.
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  invitedById String
+  invitedBy   User   @relation("InvitationSender", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  /// One live invitation per email per school; re-inviting replaces it.
+  @@unique([schoolId, email])
+  @@index([schoolId, createdAt])
+  @@map("invitations")
+}
+
+/// A capability that can be granted to an individual member.
+///
+/// Roles answer "what job does this person do"; addons answer "what is this
+/// person allowed to do", which is not the same question. A school may want one
+/// senior tutor who can invite colleagues without making them an admin.
+///
+/// A closed enum rather than free-text strings: both the API and the app switch
+/// on these, and a typo in a permission is the worst kind of bug to debug.
+/// Adding a capability is one value here plus one registry entry on each side
+/// that implements it.
+enum AddonKey {
+  /// Invite tutors to the school.
+  INVITE_TUTORS
+  /// Send an announcement to everyone in the school.
+  BROADCAST_ANNOUNCEMENTS
+  /// Add, edit and remove students. A tutor may only touch their own; an admin
+  /// holds every addon and so reaches the whole school.
+  MANAGE_STUDENTS
+}
+
+/// A capability granted to one member.
+///
+/// Rows rather than a bitmask or a JSON array: a grant has an author and a date,
+/// which is what makes "who gave them that?" answerable.
+model UserAddon {
+  id        String   @id @default(cuid())
+  addon     AddonKey
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation("UserAddons", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The admin who enabled it. Kept for audit; nulled if they leave.
+  enabledById String?
+  enabledBy   User?   @relation("AddonGranter", fields: [enabledById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, addon])
+  @@index([userId])
+  @@map("user_addons")
+}
+
+/// Where a support request stands. `NEW` until somebody looks at it.
+enum SupportRequestStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+}
+
+/// A message a user sent to support.
+///
+/// Stored before any attempt to deliver it. Email can fail, a provider can be
+/// unconfigured, and a request that exists only in an outbound message is a
+/// request that was never received — so the row is the commitment and the email
+/// is a notification about it.
+model SupportRequest {
+  id         String               @id @default(cuid())
+  message    String
+  status     SupportRequestStatus @default(NEW)
+  createdAt  DateTime             @default(now())
+  handledAt  DateTime?
+  /// Whether the notification email actually went out; null while untried.
+  notifiedAt DateTime?
+
+  userId String
+  user   User   @relation("SupportRequester", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Denormalised so support can triage by school without a join.
+  schoolId String
+
+  @@index([status, createdAt])
+  @@index([userId, createdAt])
+  @@map("support_requests")
+}
