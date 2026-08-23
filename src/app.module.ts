@@ -11,6 +11,7 @@ import { MailModule } from './mail/mail.module';
 import { NotesModule } from './notes/notes.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { PushModule } from './push/push.module';
 import { SchoolsModule } from './schools/schools.module';
 import { StudentsModule } from './students/students.module';
 import { SupportModule } from './support/support.module';
@@ -39,6 +40,7 @@ import { UsersModule } from './users/users.module';
     NotificationsModule,
     NotesModule,
     FilesModule,
+    PushModule,
     SupportModule,
   ],
   controllers: [HealthController],

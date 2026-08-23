@@ -42,6 +42,19 @@ const envSchema = z.object({
    */
   UPLOADS_DIR: z.string().default('./uploads'),
   /**
+   * How push notifications leave the server.
+   *
+   * `log` writes them to the server log instead of sending — the only supported
+   * value until credentials exist, and what makes the whole path testable with no
+   * Firebase project and no device.
+   */
+  PUSH_TRANSPORT: z.enum(['log', 'expo']).default('log'),
+  /**
+   * Optional Expo access token, for a project with "enhanced security" enabled.
+   * Sending works without one for most projects.
+   */
+  EXPO_ACCESS_TOKEN: z.string().optional(),
+  /**
    * Largest accepted upload.
    *
    * A limit rather than none: without one, a single request decides how much

@@ -141,7 +141,9 @@ describe('Notifications', () => {
         .send({ text: '  Parents evening on Friday  ' })
         .expect(201);
 
-      expect(response.body).toEqual({ recipients: 3 });
+      // `devices` is how many phones were actually pushed to — zero here, since
+      // nobody in this test has registered one.
+      expect(response.body).toEqual({ recipients: 3, devices: 0 });
 
       for (const member of [admin, tutorA, tutorB]) {
         const theirs = await test.prisma.notification.findFirstOrThrow({

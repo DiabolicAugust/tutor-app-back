@@ -99,6 +99,7 @@ model User {
 
   supportRequests SupportRequest[] @relation("SupportRequester")
   notesWritten    Note[]           @relation("NoteAuthor")
+  devices         PushToken[]      @relation("UserDevices")
 
   @@index([schoolId])
   @@map("users")
@@ -199,6 +200,38 @@ model Note {
   @@index([studentId, createdAt])
   @@index([lessonId, createdAt])
   @@map("notes")
+}
+
+/// Which store's push service a token belongs to.
+enum DevicePlatform {
+  ANDROID
+  IOS
+  WEB
+}
+
+/// A device that can receive push notifications.
+///
+/// One row per **device**, not per user, and `token` is unique because of what
+/// that implies: a phone can be handed to somebody else, or the same person can
+/// sign out and sign in as a colleague. Registering a token that already exists
+/// therefore reassigns it rather than adding a second row — otherwise an
+/// announcement would keep arriving for whoever used the device first.
+///
+/// `lastSeenAt` is what makes stale rows findable. A token stays valid until the
+/// push service says otherwise, and reinstalling an app issues a new one without
+/// retiring the old, so without this the table only grows.
+model PushToken {
+  id         String         @id @default(cuid())
+  token      String         @unique
+  platform   DevicePlatform
+  createdAt  DateTime       @default(now())
+  lastSeenAt DateTime       @default(now())
+
+  userId String
+  user   User   @relation("UserDevices", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_tokens")
 }
 
 /// Kinds a server actually sends. The app derives lesson reminders itself from

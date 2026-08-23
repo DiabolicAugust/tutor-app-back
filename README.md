@@ -207,6 +207,7 @@ fetch and a cast rather than a mapping layer:
 | POST | `/api/invitations/token/:token/accept` | public — creates the account, returns a session |
 | GET | `/api/notifications` | recipient |
 | POST | `/api/notifications/:id/read`, `/read-all` | recipient |
+| POST · DELETE | `/api/users/me/devices` | caller — registers or forgets a push token |
 | GET | `/api/students/:id/lessons` | owner or admin — history, newest first |
 | GET · POST | `/api/students/:id/notes` | owner or admin |
 | GET · POST | `/api/lessons/:id/notes` | owner or admin |
@@ -235,6 +236,39 @@ lesson's notes stay genuinely separate, which is how the app shows them.
 Neither needs a capability. Writing something down is part of teaching, not administration —
 what is gated is reaching the student or lesson at all, and `StudentsService.findOne` already
 decides that. Only the author, or an admin, may remove a note.
+
+## Push notifications
+
+An announcement is a row per recipient **and** a push to every device they have
+registered — in that order, and the push can never fail the request. The feed is where
+an announcement lives; a push is a tap on the shoulder about it. A school whose
+announcement failed to send because a phone was unreachable would be a worse outcome
+than one whose phones stayed quiet.
+
+`PushService` is a seam like `MailService`: `PUSH_TRANSPORT=log` writes notifications to
+the server log, which is what makes the whole path testable with no Firebase project and no
+device. `expo` sends through Expo's push service, in batches of 100.
+
+`push_tokens` holds one row per **device**, and `token` is unique because of what that
+implies. A phone can be handed to somebody else, or the same person can sign out and sign in
+as a colleague, so registering a token that already exists *reassigns* it. A second row
+would keep sending the school's announcements to whoever used the device first.
+
+Dead tokens are dropped. `PushService` returns the tokens the push service rejected as
+`DeviceNotRegistered` and the caller deletes them — and only that error, because anything
+else may be transient and deleting a token over a temporary fault would silently stop
+notifying somebody forever. Without this the table keeps every token the app has ever
+issued, and each reinstall adds another.
+
+The notification's body is the announcement text and its title is the school's name, both
+untranslated. That is not laziness: the OS renders this while the app is not running, so the
+server cannot ask which language the reader prefers. The only honest text is text that does
+not depend on knowing — and the announcement is already in the language its author chose.
+
+Announcements are delivered on their own Android channel rather than the lesson-reminder
+one. Android lets people mute a channel, and "the school is telling you something" is worth
+treating separately from "your lesson starts soon" — which also keeps the reminder chime
+meaning one thing.
 
 ## Capabilities
 
