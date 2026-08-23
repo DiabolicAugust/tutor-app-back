@@ -1,10 +1,18 @@
 import type {
+  Group,
+  Lesson,
   Prisma,
   School,
   Student,
   User,
 } from '../../generated/prisma/client';
-import { AddonKey, UserRole } from '../../generated/prisma/enums';
+import {
+  AddonKey,
+  AttendanceStatus,
+  GradeKind,
+  LessonStatus,
+  UserRole,
+} from '../../generated/prisma/enums';
 import { AuthService } from '../../src/auth/auth.service';
 import type { TestApp } from './test-app';
 
@@ -30,7 +38,9 @@ const unique = (prefix: string): string => `${prefix}-${++counter}`;
 
 export async function makeSchool(
   { prisma }: TestApp,
-  overrides: Partial<Pick<School, 'name' | 'slug' | 'timezone'>> = {},
+  overrides: Partial<
+    Pick<School, 'name' | 'slug' | 'timezone' | 'gradeScaleMax'>
+  > = {},
 ): Promise<School> {
   const slug = overrides.slug ?? unique('school');
 
@@ -39,6 +49,9 @@ export async function makeSchool(
       name: overrides.name ?? `School ${slug}`,
       slug,
       timezone: overrides.timezone ?? 'Europe/Kyiv',
+      ...(overrides.gradeScaleMax === undefined
+        ? {}
+        : { gradeScaleMax: overrides.gradeScaleMax }),
     },
   });
 }
@@ -106,6 +119,9 @@ export function makeLesson(
     startsAt: Date;
     subject?: string;
     durationMinutes?: number;
+    status?: LessonStatus;
+    topic?: string;
+    homework?: string;
   },
 ) {
   return prisma.lesson.create({
@@ -116,6 +132,149 @@ export function makeLesson(
       schoolId: options.school.id,
       tutorId: options.tutor.id,
       studentId: options.student.id,
+      ...(options.status ? { status: options.status } : {}),
+      ...(options.topic ? { topic: options.topic } : {}),
+      ...(options.homework ? { homework: options.homework } : {}),
+    },
+  });
+}
+
+/** A group, optionally with students already in it. */
+export async function makeGroup(
+  { prisma }: TestApp,
+  options: {
+    school: School;
+    tutor: User;
+    name?: string;
+    subject?: string;
+    level?: string;
+    members?: Student[];
+  },
+): Promise<Group> {
+  return prisma.group.create({
+    data: {
+      name: options.name ?? unique('group'),
+      subject: options.subject ?? 'English',
+      level: options.level ?? null,
+      schoolId: options.school.id,
+      tutorId: options.tutor.id,
+      members: options.members?.length
+        ? {
+            create: options.members.map((student) => ({
+              studentId: student.id,
+            })),
+          }
+        : undefined,
+    },
+  });
+}
+
+/** A lesson booked for a group rather than for one student. */
+export function makeGroupLesson(
+  { prisma }: TestApp,
+  options: {
+    school: School;
+    tutor: User;
+    group: Group;
+    startsAt: Date;
+    subject?: string;
+    durationMinutes?: number;
+    status?: LessonStatus;
+  },
+) {
+  return prisma.lesson.create({
+    data: {
+      subject: options.subject ?? 'English',
+      startsAt: options.startsAt,
+      durationMinutes: options.durationMinutes ?? 60,
+      schoolId: options.school.id,
+      tutorId: options.tutor.id,
+      groupId: options.group.id,
+      ...(options.status ? { status: options.status } : {}),
+    },
+  });
+}
+
+/**
+ * A lesson that has already been written up for one student.
+ *
+ * Since groups, attendance lives in its own table, so seeding a marked lesson is
+ * two rows rather than a column — worth a factory precisely because getting it to
+ * one call is what keeps the progress tests readable.
+ */
+export async function makeMarkedLesson(
+  test: TestApp,
+  options: {
+    school: School;
+    tutor: User;
+    student: Student;
+    startsAt: Date;
+    attendance: AttendanceStatus;
+    homeworkDone?: boolean;
+    topic?: string;
+    homework?: string;
+  },
+) {
+  const lesson = await makeLesson(test, {
+    ...options,
+    // Deliberately derived rather than passed: a seeded lesson whose status
+    // disagrees with its register is a state the API cannot produce, and a test
+    // built on one proves nothing.
+    status:
+      options.attendance === AttendanceStatus.ABSENT_EXCUSED
+        ? LessonStatus.CANCELLED
+        : LessonStatus.COMPLETED,
+  });
+
+  await test.prisma.lessonAttendance.create({
+    data: {
+      lessonId: lesson.id,
+      studentId: options.student.id,
+      status: options.attendance,
+      homeworkDone: options.homeworkDone ?? null,
+    },
+  });
+
+  return lesson;
+}
+
+/**
+ * A mark already in the book.
+ *
+ * Defaults to a classic grade so the common case reads as one line, and takes
+ * `weight` explicitly because the weighted average is the thing most worth
+ * testing and a default of 1 would hide it.
+ */
+export function makeGrade(
+  { prisma }: TestApp,
+  options: {
+    student: Student;
+    author: User;
+    lesson?: Lesson;
+    kind?: GradeKind;
+    value?: number | null;
+    weight?: number;
+    category?: string;
+    comment?: string;
+  },
+) {
+  const kind = options.kind ?? GradeKind.CLASSIC;
+
+  return prisma.grade.create({
+    data: {
+      kind,
+      value:
+        options.value === undefined
+          ? kind === GradeKind.DESCRIPTIVE
+            ? null
+            : 10
+          : options.value,
+      weight: options.weight ?? 1,
+      category: options.category ?? null,
+      comment: options.comment ?? null,
+      studentId: options.student.id,
+      authorId: options.author.id,
+      lessonId: options.lesson?.id ?? null,
     },
   });
 }

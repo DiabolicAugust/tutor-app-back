@@ -7,13 +7,13 @@
 // deliberately identical to the app's types.
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider            = "prisma-client"
+  output              = "../generated/prisma"
   // The rest of this project compiles to CommonJS, and the generator defaults to
   // ESM: without this the emitted client carries `import.meta`, which makes Node
   // treat the compiled file as a module and fail on `exports is not defined`
   // before the server finishes starting.
-  moduleFormat = "cjs"
+  moduleFormat        = "cjs"
   // Extensionless relative imports, because the emitted client is CommonJS: the
   // default `.js` suffixes are an ESM requirement that only TypeScript's own
   // resolver understands, and every other tool reading these files — Jest's
@@ -28,20 +28,26 @@ datasource db {
 /// A tutoring business. Every other row belongs to exactly one, so tenant
 /// isolation is a single `where` clause rather than a convention.
 model School {
-  id        String   @id @default(cuid())
-  name      String
+  id            String   @id @default(cuid())
+  name          String
   /// Human-readable identifier for invite links and, later, subdomains. A cuid
   /// is fine for a foreign key and useless in a URL somebody has to type.
-  slug      String   @unique
+  slug          String   @unique
   /// IANA zone the school schedules in. Lesson times are meaningless without
   /// one as soon as there is a second school in another country.
-  timezone  String   @default("UTC")
+  timezone      String   @default("UTC")
+  /// Top of the school's classic grading scale — 12 in Ukraine, 6 in Poland,
+  /// 5 in much of the region. A setting rather than a constant because a grade
+  /// of 5 means "excellent" or "mediocre" depending on it, and an average is
+  /// unreadable without knowing which.
+  gradeScaleMax Int      @default(12)
   /// Independent tutors get a school of their own; the app shows no difference.
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   users       User[]
   students    Student[]
+  groups      Group[]
   lessons     Lesson[]
   files       File[]
   invitations Invitation[]
@@ -77,6 +83,8 @@ model User {
 
   /// Lessons this user teaches — the "whose calendar" axis in the app.
   lessonsTaught   Lesson[]       @relation("LessonTutor")
+  /// Groups this user runs.
+  groupsTaught    Group[]        @relation("GroupTutor")
   /// Students this user teaches.
   students        Student[]      @relation("StudentTutor")
   notifications   Notification[]
@@ -99,6 +107,7 @@ model User {
 
   supportRequests SupportRequest[] @relation("SupportRequester")
   notesWritten    Note[]           @relation("NoteAuthor")
+  gradesGiven     Grade[]          @relation("GradeAuthor")
   devices         PushToken[]      @relation("UserDevices")
 
   @@index([schoolId])
@@ -124,10 +133,15 @@ model Student {
   tutorId String
   tutor   User   @relation("StudentTutor", fields: [tutorId], references: [id], onDelete: Cascade)
 
-  lessons Lesson[]
-  notes   Note[]
+  lessons     Lesson[]
+  notes       Note[]
+  grades      Grade[]
+  /// Groups this student is in. A student can be in several: a teenager doing
+  /// both a conversation group and exam prep is the ordinary case.
+  groups      GroupMember[]
+  attendances LessonAttendance[]
   /// Documents kept against the student — a contract, a report, a worksheet.
-  files   File[]
+  files       File[]
 
   @@index([schoolId])
   @@index([tutorId])
@@ -138,6 +152,41 @@ enum LessonStatus {
   SCHEDULED
   COMPLETED
   CANCELLED
+}
+
+/// Whether the student turned up — and if not, whose fault it was.
+///
+/// The excused/unexcused split is not bookkeeping pedantry: it is the whole
+/// commercial difference between a lesson somebody cancelled in time and a
+/// no-show. One is refunded, the other is charged, and a single `ABSENT` value
+/// would make the schedule unable to say which.
+///
+/// Null on a lesson means nobody has marked it yet, which is why it is optional
+/// rather than carrying a `NOT_MARKED` value: "unknown" is the absence of an
+/// answer, not one of the answers.
+enum AttendanceStatus {
+  PRESENT
+  /// Turned up, but late. Present for billing, distinct for the record.
+  LATE
+  /// Cancelled in time, or a reason the school accepts. Not charged.
+  ABSENT_EXCUSED
+  /// A no-show. Charged, because the slot was held.
+  ABSENT_UNEXCUSED
+}
+
+/// How a mark is expressed.
+///
+/// Three kinds rather than one number, because schools genuinely grade in three
+/// different registers and forcing one on them is what makes a gradebook go
+/// unused: a scale mark for a test, a percentage for a quiz, and words for
+/// everything that does not reduce to a number.
+enum GradeKind {
+  /// A point on the school's scale — see `School.gradeScaleMax`.
+  CLASSIC
+  /// 0–100.
+  PERCENTAGE
+  /// Words only. Carries no value, and is deliberately left out of averages.
+  DESCRIPTIVE
 }
 
 model Lesson {
@@ -155,15 +204,140 @@ model Lesson {
   tutorId String
   tutor   User   @relation("LessonTutor", fields: [tutorId], references: [id], onDelete: Cascade)
 
-  studentId String
-  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  /// The student, for a one-to-one lesson. Null for a group lesson.
+  ///
+  /// **Exactly one of `studentId` and `groupId` is set.** Prisma cannot express
+  /// that, so `LessonsService` enforces it — the same arrangement `Note` uses for
+  /// the same reason: two near-identical tables for one idea would mean two of
+  /// everything above them, and they would drift.
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
-  notes Note[]
+  /// The group, for a group lesson. Null for a one-to-one lesson.
+  ///
+  /// The group rather than a list of students, because membership changes and the
+  /// lesson should follow it: adding somebody to a group on Tuesday must put them
+  /// in Wednesday's lesson without anybody editing the lesson.
+  groupId String?
+  group   Group?  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  /// What was actually covered. Null until the lesson has been taught, which is
+  /// also what makes "which lessons still need writing up" a query.
+  ///
+  /// Lesson-level, unlike attendance: the topic is the same for everybody in the
+  /// room, and so is the homework that was set.
+  topic    String?
+  /// What was set for next time. Whether each student *did* it is per-student —
+  /// see `LessonAttendance.homeworkDone`.
+  homework String?
+
+  notes       Note[]
+  grades      Grade[]
+  attendances LessonAttendance[]
 
   /// Range queries by calendar owner are the calendar's only read pattern.
   @@index([tutorId, startsAt])
   @@index([schoolId, startsAt])
+  @@index([groupId, startsAt])
   @@map("lessons")
+}
+
+/// A set of students taught together.
+///
+/// The container a group lesson hangs off, rather than a list of students on the
+/// lesson itself: membership changes, and the schedule has to follow it. Adding
+/// somebody to a group on Tuesday must put them in Wednesday's lesson without
+/// anybody editing the lesson.
+model Group {
+  id        String   @id @default(cuid())
+  name      String
+  /// What the group studies; prefills the subject when booking for it.
+  subject   String
+  /// Free text — "B1", "Beginners", "Year 9". Every school names levels its own
+  /// way, so a closed list would be wrong for all of them.
+  level     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  /// The tutor who runs it. Same rule as a student: a tutor sees their own, an
+  /// admin sees the school's.
+  tutorId String
+  tutor   User   @relation("GroupTutor", fields: [tutorId], references: [id], onDelete: Cascade)
+
+  members GroupMember[]
+  lessons Lesson[]
+
+  @@index([schoolId])
+  @@index([tutorId])
+  @@map("groups")
+}
+
+/// One student's place in one group.
+///
+/// A row rather than an array column, so it carries a date and can be queried
+/// from either side — "who is in this group" and "which groups is this student
+/// in" are both real questions.
+///
+/// Deliberately no `leftAt`. Removing somebody deletes this row and nothing else:
+/// their attendance and marks reference the lesson and the student directly, so
+/// the history stays intact without a second concept of membership-over-time to
+/// keep consistent.
+model GroupMember {
+  id       String   @id @default(cuid())
+  joinedAt DateTime @default(now())
+
+  groupId String
+  group   Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  /// Nobody is in a group twice.
+  @@unique([groupId, studentId])
+  @@index([studentId])
+  @@map("group_members")
+}
+
+/// Whether one student turned up to one lesson.
+///
+/// A row per student per lesson, which is the only shape that works for both
+/// kinds of lesson: a one-to-one lesson gets exactly one row, a group lesson one
+/// per member. The alternative — a column on the lesson for the individual case
+/// and a table for the group case — would be two mechanisms for one idea, and
+/// every feature above them would have to pick one and could pick wrong.
+///
+/// Absence of a row means nobody has marked this student yet. That is why there
+/// is no `NOT_MARKED` status: "unknown" is the absence of an answer, not one of
+/// the answers.
+///
+/// No `schoolId`, like `Note` and `Grade`: every read and write goes through the
+/// lesson, whose ownership has already been proven.
+model LessonAttendance {
+  id           String           @id @default(cuid())
+  status       AttendanceStatus
+  /// Whether this student's homework came back done.
+  ///
+  /// Per-student while the homework *text* is per-lesson, because that is how it
+  /// actually works: one assignment is set for the room, and each person either
+  /// did it or did not. Three states, so nullable — nobody has checked, checked
+  /// and done, checked and not done.
+  homeworkDone Boolean?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  lessonId String
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  /// One answer per student per lesson; marking again updates it.
+  @@unique([lessonId, studentId])
+  @@index([studentId])
+  @@map("lesson_attendances")
 }
 
 /// Something a tutor wrote down — about a student in general, or about one
@@ -200,6 +374,58 @@ model Note {
   @@index([studentId, createdAt])
   @@index([lessonId, createdAt])
   @@map("notes")
+}
+
+/// A mark a tutor gave.
+///
+/// Always against a **student**, and optionally also against the lesson it came
+/// out of. That asymmetry is deliberate: the lesson is where a mark is usually
+/// entered, but the thing anybody wants to read later is the student's history,
+/// and a grade whose only owner was a lesson would vanish from that history the
+/// day the lesson was deleted. A grade for a term test belongs to nobody's
+/// lesson at all.
+///
+/// No `schoolId`, for the same reason `Note` has none: every read and write goes
+/// through the student, whose ownership has already been proven, and a second
+/// answer to "whose is this" is a second thing that can be wrong.
+model Grade {
+  id        String    @id @default(cuid())
+  kind      GradeKind
+  /// The number, for `CLASSIC` and `PERCENTAGE`. Null for `DESCRIPTIVE`.
+  ///
+  /// A float rather than an int because half-marks are real ("4.5") and a
+  /// percentage of 87.5 is not a rounding error. The range is validated against
+  /// the school's scale in the service, not here — the database cannot see which
+  /// school this belongs to without a join.
+  value     Float?
+  /// What it was for: "speaking", "homework", "unit 3 test". Free text rather
+  /// than an enum, because every school names these differently and a closed
+  /// list would be wrong for all of them.
+  category  String?
+  /// The words. The entire mark for `DESCRIPTIVE`, an optional remark otherwise.
+  comment   String?
+  /// How much it counts in the average. A term test is not a vocabulary quiz.
+  weight    Int       @default(1)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  /// The lesson it was given in, when it was given in one. `SetNull` rather than
+  /// `Cascade`: deleting a lesson must not silently delete a student's marks.
+  lessonId String?
+  lesson   Lesson? @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+
+  /// Who gave it. Shown in the app, and the only person besides an admin who may
+  /// change it.
+  authorId String
+  author   User   @relation("GradeAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  /// The student's gradebook, newest first — the one read that matters.
+  @@index([studentId, createdAt])
+  @@index([lessonId])
+  @@map("grades")
 }
 
 /// Which store's push service a token belongs to.
@@ -267,6 +493,10 @@ enum FilePurpose {
   LESSON_ATTACHMENT
   /// A document kept against a student: a contract, a report, a worksheet.
   STUDENT_ATTACHMENT
+  /// Teaching material a tutor keeps for themselves — a worksheet they reuse, a
+  /// textbook scan, an exam paper. Belongs to the person, not to a student, which
+  /// is what makes it reachable by its uploader rather than by the school.
+  TUTOR_LIBRARY
   OTHER
 }
 

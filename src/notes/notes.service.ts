@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 
 import type { Note, User } from '../../generated/prisma/client';
+import { LessonsService } from '../lessons/lessons.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentsService } from '../students/students.service';
 
@@ -27,6 +28,7 @@ export class NotesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly students: StudentsService,
+    private readonly lessons: LessonsService,
   ) {}
 
   /** Notes about the student in general, newest first. */
@@ -59,7 +61,7 @@ export class NotesService {
 
   /** Notes about one lesson: what happened, what to do next time. */
   async listForLesson(user: User, lessonId: string): Promise<NoteWithAuthor[]> {
-    const lesson = await this.findLesson(user, lessonId);
+    const lesson = await this.lessons.findReachable(user, lessonId);
 
     return this.prisma.note.findMany({
       where: { lessonId: lesson.id },
@@ -73,7 +75,7 @@ export class NotesService {
     lessonId: string,
     text: string,
   ): Promise<NoteWithAuthor> {
-    const lesson = await this.findLesson(user, lessonId);
+    const lesson = await this.lessons.findReachable(user, lessonId);
 
     return this.prisma.note.create({
       data: { text: text.trim(), lessonId: lesson.id, authorId: user.id },
@@ -95,32 +97,12 @@ export class NotesService {
     // Reachability first: proves the note belongs to this caller's school before
     // anything else is said about it.
     if (note.studentId) await this.students.findOne(user, note.studentId);
-    if (note.lessonId) await this.findLesson(user, note.lessonId);
+    if (note.lessonId) await this.lessons.findReachable(user, note.lessonId);
 
     if (note.authorId !== user.id && user.role !== 'ADMIN') {
       throw new ForbiddenException('Only the author can remove this note');
     }
 
     await this.prisma.note.delete({ where: { id: note.id } });
-  }
-
-  /**
-   * The lesson, if this caller may see it.
-   *
-   * Same rule the calendar uses: a tutor reaches their own lessons, an admin the
-   * school's. Not-found rather than forbidden for another school's row, so the
-   * endpoint cannot confirm an id exists.
-   */
-  private async findLesson(user: User, id: string) {
-    const lesson = await this.prisma.lesson.findUnique({ where: { id } });
-
-    if (!lesson || lesson.schoolId !== user.schoolId) {
-      throw new NotFoundException('Lesson not found');
-    }
-    if (lesson.tutorId !== user.id && user.role !== 'ADMIN') {
-      throw new NotFoundException('Lesson not found');
-    }
-
-    return lesson;
   }
 }

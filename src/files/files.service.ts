@@ -24,7 +24,7 @@ export type IncomingFile = {
 };
 
 /**
- * Types a tutor plausibly keeps against a student.
+ * Types a tutor plausibly keeps — against a student, or on their own shelf.
  *
  * An allow-list rather than a deny-list: the set of dangerous types grows over
  * time and the set of useful ones does not, so guessing wrong on an allow-list
@@ -107,6 +107,56 @@ export class FilesService {
     });
   }
 
+  /**
+   * A tutor's own library — the material they keep for themselves.
+   *
+   * Scoped to the caller rather than the school, including for an admin: an
+   * admin's library is their own library, and quietly showing them everybody's
+   * worksheets is not what "admin sees everything" should mean for a personal
+   * shelf. Reaching a colleague's file by id is a different question, answered in
+   * `findReachable`.
+   */
+  listOwnLibrary(user: User): Promise<File[]> {
+    return this.prisma.file.findMany({
+      where: {
+        schoolId: user.schoolId,
+        purpose: FilePurpose.TUTOR_LIBRARY,
+        uploadedById: user.id,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Stores material in the caller's own library.
+   *
+   * Same write order as a student's document, for the same reason: the row first,
+   * so a failed upload leaves something findable rather than orphaned bytes.
+   */
+  async uploadToLibrary(user: User, incoming: IncomingFile): Promise<File> {
+    this.assertAcceptable(incoming);
+
+    const row = await this.prisma.file.create({
+      data: {
+        storageKey: 'pending',
+        originalName: incoming.originalName.slice(0, 255),
+        mimeType: incoming.mimeType,
+        sizeBytes: incoming.size,
+        purpose: FilePurpose.TUTOR_LIBRARY,
+        schoolId: user.schoolId,
+        uploadedById: user.id,
+      },
+    });
+
+    const storageKey = this.storage.keyFor(user.schoolId, row.id);
+    await this.storage.save(storageKey, incoming.buffer);
+
+    return this.prisma.file.update({
+      where: { id: row.id },
+      data: { storageKey, uploadedAt: new Date() },
+    });
+  }
+
   /** The row and a stream of its bytes, if this caller may reach it. */
   async open(user: User, id: string) {
     const file = await this.findReachable(user, id);
@@ -165,6 +215,16 @@ export class FilesService {
     }
     if (file.studentId) {
       await this.students.findOne(user, file.studentId);
+    }
+    // A personal library belongs to the person. An admin can still reach one —
+    // they are accountable for what is stored on the school's account — but a
+    // colleague cannot, and a 404 keeps the id from being confirmed.
+    if (
+      file.purpose === FilePurpose.TUTOR_LIBRARY &&
+      file.uploadedById !== user.id &&
+      user.role !== 'ADMIN'
+    ) {
+      throw new NotFoundException('File not found');
     }
 
     return file;

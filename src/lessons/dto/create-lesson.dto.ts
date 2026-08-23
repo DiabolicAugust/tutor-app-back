@@ -9,8 +9,22 @@ import {
 } from 'class-validator';
 
 export class CreateLessonDto {
+  /**
+   * The student, for a one-to-one lesson.
+   *
+   * Exactly one of `studentId` and `groupId` must be sent; the service rejects
+   * neither and both. Not expressed with `ValidateIf` because the rule is about
+   * the pair rather than about either field, and a message naming both is the
+   * one a caller can act on.
+   */
+  @IsOptional()
   @IsString()
-  studentId!: string;
+  studentId?: string;
+
+  /** The group, for a group lesson. */
+  @IsOptional()
+  @IsString()
+  groupId?: string;
 
   @IsString()
   @MaxLength(120)

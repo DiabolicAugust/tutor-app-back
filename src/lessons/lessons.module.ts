@@ -9,5 +9,6 @@ import { StudentLessonsController } from './student-lessons.controller';
   imports: [StudentsModule],
   controllers: [LessonsController, StudentLessonsController],
   providers: [LessonsService],
+  exports: [LessonsService],
 })
 export class LessonsModule {}

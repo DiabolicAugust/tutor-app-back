@@ -33,6 +33,31 @@ import { FilesService } from './files.service';
 export class FilesController {
   constructor(private readonly files: FilesService) {}
 
+  /**
+   * The caller's own library — material they keep for themselves rather than
+   * against a student. LangLion calls this a media library; the idea is the same.
+   */
+  @Get('files')
+  listLibrary(@CurrentUser() user: User) {
+    return this.files.listOwnLibrary(user);
+  }
+
+  @Post('files')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadToLibrary(
+    @CurrentUser() user: User,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) throw new BadRequestException('No file was sent');
+
+    return this.files.uploadToLibrary(user, {
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+      buffer: file.buffer,
+    });
+  }
+
   @Get('students/:studentId/files')
   list(@CurrentUser() user: User, @Param('studentId') studentId: string) {
     return this.files.listForStudent(user, studentId);

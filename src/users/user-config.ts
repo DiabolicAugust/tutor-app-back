@@ -20,6 +20,20 @@ const userConfigSchema = z.object({
   lessonReminders: z.boolean().default(false),
   /** How long before the lesson to send it. */
   lessonReminderMinutes: z.coerce.number().int().min(5).max(1440).default(30),
+  /**
+   * Whether this tutor marks work at all.
+   *
+   * On by default, and a *display* preference rather than a permission: turning
+   * it off hides marks and averages from this person's app, and does not touch
+   * what is stored. A tutor who never grades should not have to look past an
+   * empty gradebook on every student, and a tutor who switches it back on must
+   * find their history intact.
+   *
+   * Lives here rather than on the school, because two tutors in one school
+   * genuinely differ: conversation practice has nothing to mark, exam prep is
+   * mostly marking.
+   */
+  gradesEnabled: z.boolean().default(true),
 });
 
 export type UserConfig = z.infer<typeof userConfigSchema>;

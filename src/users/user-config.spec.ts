@@ -22,7 +22,18 @@ describe('parseUserConfig', () => {
     ).toEqual({
       lessonReminders: true,
       lessonReminderMinutes: 15,
+      gradesEnabled: true,
     });
+  });
+
+  it('starts with grades on, because most tutors mark something', () => {
+    expect(defaultUserConfig.gradesEnabled).toBe(true);
+  });
+
+  it('keeps grades switched off once somebody has switched them off', () => {
+    // The one that matters: a default of `true` must not overwrite a stored
+    // `false`, or the setting silently turns itself back on.
+    expect(parseUserConfig({ gradesEnabled: false }).gradesEnabled).toBe(false);
   });
 
   it('falls back rather than throwing on a value of the wrong shape', () => {
@@ -37,10 +48,7 @@ describe('parseUserConfig', () => {
   it('drops a setting the server no longer knows about', () => {
     expect(
       parseUserConfig({ lessonReminders: true, dailyDigest: true }),
-    ).toEqual({
-      lessonReminders: true,
-      lessonReminderMinutes: 30,
-    });
+    ).toEqual({ ...defaultUserConfig, lessonReminders: true });
   });
 
   it('rejects a reminder time outside the range a reminder makes sense in', () => {
@@ -70,7 +78,11 @@ describe('mergeUserConfig', () => {
         { lessonReminders: true, lessonReminderMinutes: 60 },
         { lessonReminderMinutes: 15 },
       ),
-    ).toEqual({ lessonReminders: true, lessonReminderMinutes: 15 });
+    ).toEqual({
+      ...defaultUserConfig,
+      lessonReminders: true,
+      lessonReminderMinutes: 15,
+    });
   });
 
   it('ignores keys explicitly set to undefined', () => {
@@ -81,7 +93,24 @@ describe('mergeUserConfig', () => {
         { lessonReminders: true, lessonReminderMinutes: 60 },
         { lessonReminders: undefined, lessonReminderMinutes: 15 },
       ),
-    ).toEqual({ lessonReminders: true, lessonReminderMinutes: 15 });
+    ).toEqual({
+      ...defaultUserConfig,
+      lessonReminders: true,
+      lessonReminderMinutes: 15,
+    });
+  });
+
+  it('switches grades off without disturbing the rest', () => {
+    expect(
+      mergeUserConfig(
+        { lessonReminders: true, lessonReminderMinutes: 60 },
+        { gradesEnabled: false },
+      ),
+    ).toEqual({
+      lessonReminders: true,
+      lessonReminderMinutes: 60,
+      gradesEnabled: false,
+    });
   });
 
   it('returns a complete config even from an empty patch', () => {

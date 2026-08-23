@@ -3,6 +3,8 @@ import request from 'supertest';
 import { LessonStatus, UserRole } from '../generated/prisma/enums';
 import {
   authHeader,
+  makeGroup,
+  makeGroupLesson,
   makeLesson,
   makeSchool,
   makeStudent,
@@ -291,7 +293,7 @@ describe('Lessons', () => {
   });
 
   describe('confirming a lesson', () => {
-    it("spends one lesson from the student's package", async () => {
+    it("leaves the student's balance alone, because charging follows the register", async () => {
       const school = await makeSchool(test);
       const tutor = await makeUser(test, { school });
       const student = await makeStudent(test, {
@@ -312,13 +314,16 @@ describe('Lessons', () => {
         .send({ status: LessonStatus.COMPLETED })
         .expect(200);
 
+      // Moving a lesson in the schedule is not the same act as saying who came,
+      // and since a group lesson charges only the people who turned up, charging
+      // lives in exactly one place: the register. See the Gradebook suite.
       const after = await test.prisma.student.findUniqueOrThrow({
         where: { id: student.id },
       });
-      expect(after.paidLessonsLeft).toBe(3);
+      expect(after.paidLessonsLeft).toBe(4);
     });
 
-    it('does not spend a second one when confirmed twice', async () => {
+    it('stays put when confirmed twice', async () => {
       const school = await makeSchool(test);
       const tutor = await makeUser(test, { school });
       const student = await makeStudent(test, {
@@ -342,11 +347,10 @@ describe('Lessons', () => {
           .expect(200);
       }
 
-      // A double tap on a slow connection must not cost the student twice.
       const after = await test.prisma.student.findUniqueOrThrow({
         where: { id: student.id },
       });
-      expect(after.paidLessonsLeft).toBe(3);
+      expect(after.paidLessonsLeft).toBe(4);
     });
 
     it('spends nothing when the lesson is cancelled', async () => {
@@ -568,6 +572,139 @@ describe('Lessons', () => {
         .expect(200);
 
       expect(response.body).toHaveLength(1);
+    });
+  });
+
+  describe('booking for a group', () => {
+    async function seedGroup() {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const [ann, bob] = await Promise.all([
+        makeStudent(test, { school, tutor, name: 'Ann' }),
+        makeStudent(test, { school, tutor, name: 'Bob' }),
+      ]);
+      const group = await makeGroup(test, {
+        school,
+        tutor,
+        name: 'B1 Tuesdays',
+        members: [ann, bob],
+      });
+
+      return { school, tutor, ann, bob, group };
+    }
+
+    it('books onto the group rather than any one student', async () => {
+      const { tutor, group } = await seedGroup();
+
+      const response = await request(test.server)
+        .post('/api/lessons')
+        .set(await authHeader(test, tutor))
+        .send({
+          groupId: group.id,
+          subject: 'English',
+          startsAt: at(1).toISOString(),
+          durationMinutes: 60,
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({
+        studentId: null,
+        groupId: group.id,
+      });
+      // The members come with the lesson, so the calendar can expand a group
+      // block without a second request.
+      expect(response.body.group.members).toHaveLength(2);
+    });
+
+    it('refuses a lesson for neither a student nor a group', async () => {
+      const { tutor } = await seedGroup();
+
+      await request(test.server)
+        .post('/api/lessons')
+        .set(await authHeader(test, tutor))
+        .send({
+          subject: 'English',
+          startsAt: at(1).toISOString(),
+          durationMinutes: 60,
+        })
+        .expect(400);
+    });
+
+    it('refuses a lesson for both at once', async () => {
+      const { tutor, ann, group } = await seedGroup();
+
+      await request(test.server)
+        .post('/api/lessons')
+        .set(await authHeader(test, tutor))
+        .send({
+          studentId: ann.id,
+          groupId: group.id,
+          subject: 'English',
+          startsAt: at(1).toISOString(),
+          durationMinutes: 60,
+        })
+        .expect(400);
+    });
+
+    it("refuses a colleague's group", async () => {
+      const { school, tutor } = await seedGroup();
+      const colleague = await makeUser(test, { school });
+      const theirs = await makeGroup(test, { school, tutor: colleague });
+
+      await request(test.server)
+        .post('/api/lessons')
+        .set(await authHeader(test, tutor))
+        .send({
+          groupId: theirs.id,
+          subject: 'English',
+          startsAt: at(1).toISOString(),
+          durationMinutes: 60,
+        })
+        .expect(404);
+    });
+
+    it("appears on each member's page in the tutor's app", async () => {
+      const { school, tutor, ann, bob, group } = await seedGroup();
+      const lesson = await makeGroupLesson(test, {
+        school,
+        tutor,
+        group,
+        startsAt: at(-1),
+      });
+
+      // `GET /students/:id/lessons` backs the student detail screen the *tutor*
+      // opens — students have no accounts here. A group lesson has to show up
+      // there, because otherwise a member's history would silently omit most of
+      // what they were taught.
+      for (const student of [ann, bob]) {
+        const response = await request(test.server)
+          .get(`/api/students/${student.id}/lessons`)
+          .set(await authHeader(test, tutor))
+          .expect(200);
+
+        expect(response.body).toHaveLength(1);
+        expect(response.body[0]).toMatchObject({
+          id: lesson.id,
+          studentId: null,
+        });
+        expect(response.body[0].group.name).toBe('B1 Tuesdays');
+      }
+    });
+
+    it('drops off that page once the student leaves the group', async () => {
+      const { school, tutor, ann, group } = await seedGroup();
+      await makeGroupLesson(test, { school, tutor, group, startsAt: at(-1) });
+
+      await test.prisma.groupMember.deleteMany({
+        where: { groupId: group.id, studentId: ann.id },
+      });
+
+      const response = await request(test.server)
+        .get(`/api/students/${ann.id}/lessons`)
+        .set(await authHeader(test, tutor))
+        .expect(200);
+
+      expect(response.body).toHaveLength(0);
     });
   });
 });

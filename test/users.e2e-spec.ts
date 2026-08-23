@@ -1,5 +1,6 @@
 import request from 'supertest';
 
+import { defaultUserConfig } from '../src/users/user-config';
 import { authHeader, makeSchool, makeUser } from './support/factories';
 import { createTestApp, type TestApp } from './support/test-app';
 
@@ -27,6 +28,7 @@ describe('User preferences', () => {
 
     // An app that starts notifying without being asked is one people mute.
     expect(response.body).toEqual({
+      ...defaultUserConfig,
       lessonReminders: false,
       lessonReminderMinutes: 30,
     });
@@ -45,6 +47,7 @@ describe('User preferences', () => {
     // The client ends up with exactly what the server stored, including the
     // fields it did not send.
     expect(response.body).toEqual({
+      ...defaultUserConfig,
       lessonReminders: true,
       lessonReminderMinutes: 30,
     });
@@ -68,6 +71,7 @@ describe('User preferences', () => {
       .expect(200);
 
     expect(response.body).toEqual({
+      ...defaultUserConfig,
       lessonReminders: true,
       lessonReminderMinutes: 120,
     });
@@ -90,6 +94,7 @@ describe('User preferences', () => {
       .expect(200);
 
     expect(session.body.config).toEqual({
+      ...defaultUserConfig,
       lessonReminders: true,
       lessonReminderMinutes: 15,
     });
@@ -138,6 +143,7 @@ describe('User preferences', () => {
 
     // A malformed config must not make an account impossible to use.
     expect(response.body).toEqual({
+      ...defaultUserConfig,
       lessonReminders: false,
       lessonReminderMinutes: 30,
     });

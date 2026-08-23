@@ -1,5 +1,6 @@
 import request from 'supertest';
 
+import { defaultUserConfig } from '../src/users/user-config';
 import { UserRole } from '../generated/prisma/enums';
 import {
   authHeader,
@@ -126,10 +127,7 @@ describe('Authentication', () => {
         .set(await authHeader(test, user))
         .expect(200);
 
-      expect(response.body.config).toEqual({
-        lessonReminders: false,
-        lessonReminderMinutes: 30,
-      });
+      expect(response.body.config).toEqual(defaultUserConfig);
     });
 
     it('falls back to defaults rather than failing on a config an older build wrote', async () => {
@@ -144,10 +142,7 @@ describe('Authentication', () => {
         .set(await authHeader(test, user))
         .expect(200);
 
-      expect(response.body.config).toEqual({
-        lessonReminders: false,
-        lessonReminderMinutes: 30,
-      });
+      expect(response.body.config).toEqual(defaultUserConfig);
     });
   });
 

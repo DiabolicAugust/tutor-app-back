@@ -266,4 +266,179 @@ describe('Student files', () => {
       expect(await test.prisma.file.count()).toBe(0);
     });
   });
+
+  describe("a tutor's own library", () => {
+    it('stores material that belongs to nobody in particular', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+
+      const response = await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, tutor))
+        .attach('file', Buffer.from('worksheet'), {
+          filename: 'unit-5.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      expect(response.body).toMatchObject({
+        originalName: 'unit-5.pdf',
+        purpose: 'TUTOR_LIBRARY',
+        studentId: null,
+      });
+      // Finalised, so the bytes are known to be on disk rather than attempted.
+      expect(response.body.uploadedAt).not.toBeNull();
+    });
+
+    it('lists only your own shelf', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const colleague = await makeUser(test, { school });
+
+      await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, colleague))
+        .attach('file', Buffer.from('theirs'), {
+          filename: 'theirs.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      const response = await request(test.server)
+        .get('/api/files')
+        .set(await authHeader(test, tutor))
+        .expect(200);
+
+      expect(response.body).toHaveLength(0);
+    });
+
+    it('keeps a library separate from a student’s documents', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      const header = await authHeader(test, tutor);
+
+      await request(test.server)
+        .post(`/api/students/${student.id}/files`)
+        .set(header)
+        .attach('file', Buffer.from('report'), {
+          filename: 'report.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      // A student's document is not library material, and the shelf must not
+      // quietly fill up with everything ever uploaded.
+      const library = await request(test.server)
+        .get('/api/files')
+        .set(header)
+        .expect(200);
+
+      expect(library.body).toHaveLength(0);
+    });
+
+    it('downloads what you put there', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const header = await authHeader(test, tutor);
+
+      const created = await request(test.server)
+        .post('/api/files')
+        .set(header)
+        .attach('file', Buffer.from('worksheet bytes'), {
+          filename: 'unit-5.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      const response = await request(test.server)
+        .get(`/api/files/${created.body.id}`)
+        .set(header)
+        .expect(200);
+
+      expect(response.body.toString()).toBe('worksheet bytes');
+    });
+
+    it("hides a colleague's library file behind a 404", async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const colleague = await makeUser(test, { school });
+
+      const created = await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, colleague))
+        .attach('file', Buffer.from('theirs'), {
+          filename: 'theirs.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      // Not 403: a personal shelf should not confirm what is on it.
+      await request(test.server)
+        .get(`/api/files/${created.body.id}`)
+        .set(await authHeader(test, tutor))
+        .expect(404);
+    });
+
+    it('lets an admin reach one, because the account is theirs to answer for', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+
+      const created = await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, tutor))
+        .attach('file', Buffer.from('worksheet'), {
+          filename: 'unit-5.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      await request(test.server)
+        .get(`/api/files/${created.body.id}`)
+        .set(await authHeader(test, admin))
+        .expect(200);
+    });
+
+    it('refuses a type nobody keeps as teaching material', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+
+      await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, tutor))
+        .attach('file', Buffer.from('MZ'), {
+          filename: 'thing.exe',
+          contentType: 'application/x-msdownload',
+        })
+        .expect(415);
+    });
+
+    it('lets you clear your own shelf', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const header = await authHeader(test, tutor);
+
+      const created = await request(test.server)
+        .post('/api/files')
+        .set(header)
+        .attach('file', Buffer.from('worksheet'), {
+          filename: 'unit-5.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      await request(test.server)
+        .delete(`/api/files/${created.body.id}`)
+        .set(header)
+        .expect(204);
+
+      const response = await request(test.server)
+        .get('/api/files')
+        .set(header)
+        .expect(200);
+
+      expect(response.body).toHaveLength(0);
+    });
+  });
 });

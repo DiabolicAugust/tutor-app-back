@@ -4,6 +4,8 @@ import { AddonsModule } from './addons/addons.module';
 import { AuthModule } from './auth/auth.module';
 import { AppConfigModule } from './config/config.module';
 import { FilesModule } from './files/files.module';
+import { GradebookModule } from './gradebook/gradebook.module';
+import { GroupsModule } from './groups/groups.module';
 import { HealthController } from './health.controller';
 import { InvitationsModule } from './invitations/invitations.module';
 import { LessonsModule } from './lessons/lessons.module';
@@ -36,9 +38,11 @@ import { UsersModule } from './users/users.module';
     InvitationsModule,
     UsersModule,
     StudentsModule,
+    GroupsModule,
     LessonsModule,
     NotificationsModule,
     NotesModule,
+    GradebookModule,
     FilesModule,
     PushModule,
     SupportModule,

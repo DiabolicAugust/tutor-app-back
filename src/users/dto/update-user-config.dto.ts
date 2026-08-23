@@ -15,4 +15,8 @@ export class UpdateUserConfigDto {
   @Min(5)
   @Max(1440)
   lessonReminderMinutes?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  gradesEnabled?: boolean;
 }
