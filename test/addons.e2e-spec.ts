@@ -1,6 +1,7 @@
 import request from 'supertest';
 
-import { UserRole } from '../generated/prisma/enums';
+import { AddonKey, UserRole } from '../generated/prisma/enums';
+import { AddonsService } from '../src/addons/addons.service';
 import { authHeader, makeSchool, makeUser } from './support/factories';
 import { createTestApp, type TestApp } from './support/test-app';
 
@@ -188,5 +189,129 @@ describe('Capabilities', () => {
       .expect(201);
 
     expect(await test.prisma.userAddon.count()).toBe(0);
+  });
+
+  describe('the roster', () => {
+    it('reports what each member actually holds', async () => {
+      const school = await makeSchool(test);
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+      const senior = await makeUser(test, {
+        school,
+        addons: ['INVITE_TUTORS'],
+      });
+      const plain = await makeUser(test, { school });
+
+      const response = await request(test.server)
+        .get('/api/schools/current/tutors')
+        .set(await authHeader(test, admin))
+        .expect(200);
+
+      const listed = (id: string) =>
+        response.body.find((member: { id: string }) => member.id === id);
+
+      // The screen that lists members is the screen that edits their
+      // capabilities, and it submits the whole set it wants to be true. Without
+      // these, every toggle would compute that set from an empty one.
+      expect(listed(senior.id).addons).toEqual(['INVITE_TUTORS']);
+      expect(listed(plain.id).addons).toEqual([]);
+    });
+
+    it('does not let a toggle strip a capability the member already had', async () => {
+      const school = await makeSchool(test);
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+      const tutor = await makeUser(test, { school, addons: ['INVITE_TUTORS'] });
+      const header = await authHeader(test, admin);
+
+      // Exactly what the app does: read the member, add one to what it reports,
+      // submit the result. If the read had returned nothing, this would silently
+      // remove INVITE_TUTORS.
+      const roster = await request(test.server)
+        .get('/api/schools/current/tutors')
+        .set(header)
+        .expect(200);
+
+      const current: string[] = roster.body.find(
+        (member: { id: string }) => member.id === tutor.id,
+      ).addons;
+
+      await setAddons(admin, tutor.id, [...current, 'MANAGE_STUDENTS']);
+
+      const rows = await test.prisma.userAddon.findMany({
+        where: { userId: tutor.id },
+      });
+      expect(rows.map((row) => row.addon).sort()).toEqual([
+        'INVITE_TUTORS',
+        'MANAGE_STUDENTS',
+      ]);
+    });
+  });
+
+  describe('an admin', () => {
+    it('holds every capability in the session, with no grant rows', async () => {
+      const school = await makeSchool(test);
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+
+      const response = await request(test.server)
+        .get('/api/auth/me')
+        .set(await authHeader(test, admin))
+        .expect(200);
+
+      // Compared against the whole enum rather than a written-out list, so adding
+      // a capability without extending the rule fails here.
+      expect([...response.body.addons].sort()).toEqual(
+        [...Object.values(AddonKey)].sort(),
+      );
+    });
+
+    it('holds every capability the moment they are created, not after a grant', async () => {
+      // Registration is the only path that makes an admin from nothing, so this
+      // is where "always" has to be true from the first request.
+      const session = await request(test.server)
+        .post('/api/schools/register')
+        .send({
+          schoolName: 'Fresh School',
+          adminName: 'Olha',
+          adminEmail: 'fresh@example.test',
+          adminPassword: 'correct-horse-battery',
+        })
+        .expect(201);
+
+      expect([...session.body.user.addons].sort()).toEqual(
+        [...Object.values(AddonKey)].sort(),
+      );
+      expect(await test.prisma.userAddon.count()).toBe(0);
+    });
+
+    it('keeps every capability after their grants are explicitly emptied', async () => {
+      const school = await makeSchool(test);
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+
+      // There are no rows to remove, but a future path that tried would not be
+      // able to take anything away — the rule is not stored, it is decided.
+      await test.prisma.userAddon.deleteMany({ where: { userId: admin.id } });
+
+      const response = await request(test.server)
+        .get('/api/auth/me')
+        .set(await authHeader(test, admin))
+        .expect(200);
+
+      expect([...response.body.addons].sort()).toEqual(
+        [...Object.values(AddonKey)].sort(),
+      );
+    });
+
+    it('reports every capability in a roster too, if one ever lists them', async () => {
+      const school = await makeSchool(test);
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+
+      // The roster currently lists tutors only, so this checks the mapping the
+      // roster is built from rather than the response: the rule must hold there
+      // as well, or including admins later would show them holding nothing.
+      const map = await test.app.get(AddonsService).mapForSchool(school.id);
+
+      expect([...map[admin.id]].sort()).toEqual(
+        [...Object.values(AddonKey)].sort(),
+      );
+    });
   });
 });

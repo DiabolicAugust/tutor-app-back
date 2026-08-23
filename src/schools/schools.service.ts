@@ -99,13 +99,26 @@ export class SchoolsService {
    * colleagues, so "my calendar" is always the first row.
    */
   async listTutors(user: User) {
-    const tutors = await this.prisma.user.findMany({
-      where: { schoolId: user.schoolId, role: UserRole.TUTOR },
-      select: TUTOR_FIELDS,
-      orderBy: { name: 'asc' },
-    });
+    const [tutors, addons] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { schoolId: user.schoolId, role: UserRole.TUTOR },
+        select: TUTOR_FIELDS,
+        orderBy: { name: 'asc' },
+      }),
+      // Included rather than left to a second request, because the screen that
+      // lists members is the screen that edits their capabilities — and it
+      // submits the whole set it wants to be true. Without these, every toggle
+      // would compute that set from an empty one and quietly remove whatever the
+      // member already had.
+      this.addons.mapForSchool(user.schoolId),
+    ]);
 
-    return [...tutors].sort(
+    const withAddons = tutors.map((tutor) => ({
+      ...tutor,
+      addons: addons[tutor.id] ?? [],
+    }));
+
+    return withAddons.sort(
       (a, b) => Number(b.id === user.id) - Number(a.id === user.id),
     );
   }

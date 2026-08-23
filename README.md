@@ -236,6 +236,39 @@ Neither needs a capability. Writing something down is part of teaching, not admi
 what is gated is reaching the student or lesson at all, and `StudentsService.findOne` already
 decides that. Only the author, or an admin, may remove a note.
 
+## Capabilities
+
+Roles say what job somebody does; addons say what they are allowed to do. A school may want
+one senior tutor who can invite colleagues without making them an admin, and roles alone
+cannot express that.
+
+**An admin always holds every capability.** They are the person who grants them, so
+requiring an admin to grant themselves permission to grant permissions is a loop with no
+useful first step. The rule is *decided*, never stored: an admin has no rows in
+`user_addons` at all, so there is nothing to be out of date, nothing to migrate when a
+capability is added, and nothing anybody can delete to take it away.
+
+That only holds because every answer comes from one place. `AddonsService.resolveFor` is
+the rule; `has` calls it, `AddonGuard` calls `has`, and the session payload calls
+`resolveFor`. Adding a capability to the enum extends what an admin holds automatically,
+and the tests compare against `Object.values(AddonKey)` rather than a written-out list so
+that stays true.
+
+The one function that used to read `user_addons` directly was `mapForSchool`, which the
+roster is built from. It reported an admin as holding nothing — the exact inverse of the
+rule — and it was unused, so nothing had noticed. It now resolves every member through the
+same decision.
+
+Granting is checked by **role, not capability**: handing out permissions is the one thing
+that must not itself be delegable, or the boundary means nothing. `setFor` also refuses an
+admin as a target, because there is nothing to grant them.
+
+`setFor` replaces rather than adds. The admin UI shows a set of toggles and submits what it
+wants to be true, which makes the operation idempotent and immune to a lost request leaving
+half a state. That is also why `GET /schools/current/tutors` returns each member's
+capabilities: the screen that lists members is the screen that edits them, and a toggle
+computing its set from an empty one would quietly remove whatever the member already had.
+
 ## Invitations
 
 An admin invites a tutor by email. The backend stores an `Invitation` row — a revocable,

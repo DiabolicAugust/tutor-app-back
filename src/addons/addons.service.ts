@@ -76,16 +76,38 @@ export class AddonsService {
     return unique;
   }
 
-  /** Grants for several members at once, for the school roster screen. */
+  /**
+   * Capabilities for every member of a school, keyed by user id.
+   *
+   * Resolved rather than merely fetched: an admin has no grant rows, so reading
+   * `user_addons` alone reports them as holding nothing — the exact opposite of
+   * the rule above. Every member therefore goes through the same decision as
+   * `resolveFor`, which is why that rule is written once and read here.
+   */
   async mapForSchool(schoolId: string): Promise<Record<string, AddonKey[]>> {
-    const rows = await this.prisma.userAddon.findMany({
-      where: { user: { schoolId } },
-      select: { userId: true, addon: true },
-    });
+    const [members, rows] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { schoolId },
+        select: { id: true, role: true },
+      }),
+      this.prisma.userAddon.findMany({
+        where: { user: { schoolId } },
+        select: { userId: true, addon: true },
+      }),
+    ]);
 
-    return rows.reduce<Record<string, AddonKey[]>>((acc, row) => {
+    const granted = rows.reduce<Record<string, AddonKey[]>>((acc, row) => {
       (acc[row.userId] ??= []).push(row.addon);
       return acc;
     }, {});
+
+    return Object.fromEntries(
+      members.map((member) => [
+        member.id,
+        member.role === UserRole.ADMIN
+          ? Object.values(AddonKey)
+          : (granted[member.id] ?? []),
+      ]),
+    );
   }
 }
