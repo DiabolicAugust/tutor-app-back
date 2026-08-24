@@ -307,6 +307,8 @@ model Lesson {
   notes       Note[]
   grades      Grade[]
   attendances LessonAttendance[]
+  /// Material handed out or recorded for this lesson.
+  files       File[]
 
   /// Range queries by calendar owner are the calendar's only read pattern.
   @@index([tutorId, startsAt])
@@ -610,6 +612,16 @@ model File {
   studentId String?
   student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
+  /// Set for a `LESSON_ATTACHMENT`: the worksheet handed out, the recording, the
+  /// slides. Kept against the lesson rather than the student, because a group
+  /// lesson hands the same sheet to everybody and copying it per student would
+  /// make five files where a person sees one.
+  ///
+  /// Cascades. A deleted lesson has no material, and a row pointing at a lesson
+  /// that no longer exists is a file nothing can reach and nothing will collect.
+  lessonId String?
+  lesson   Lesson? @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
   /// Back-references from the rows that point at this file, so deleting a file
   /// that is still in use is a database error rather than a broken image.
   avatarOf User[]   @relation("UserAvatar")
@@ -617,6 +629,7 @@ model File {
 
   @@index([schoolId, purpose])
   @@index([studentId])
+  @@index([lessonId])
   @@map("files")
 }
 

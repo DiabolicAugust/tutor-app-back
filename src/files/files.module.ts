@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { MulterModule } from '@nestjs/platform-express';
 
 import type { Env } from '../config/env';
+import { LessonsModule } from '../lessons/lessons.module';
 import { StudentsModule } from '../students/students.module';
 import { FilesController } from './files.controller';
 import { FilesService } from './files.service';
@@ -23,6 +24,8 @@ const MB = 1024 * 1024;
 @Module({
   imports: [
     StudentsModule,
+    // For the one rule it must not duplicate: who may see a lesson.
+    LessonsModule,
     /**
      * The upload ceiling, enforced where it has to be.
      *

@@ -11,6 +11,7 @@ import { ConfigService } from '@nestjs/config';
 import type { File, User } from '../../generated/prisma/client';
 import { FilePurpose } from '../../generated/prisma/enums';
 import type { Env } from '../config/env';
+import { LessonsService } from '../lessons/lessons.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentsService } from '../students/students.service';
 import { bytesLookLike } from './file-signatures';
@@ -54,6 +55,7 @@ export class FilesService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly students: StudentsService,
+    private readonly lessons: LessonsService,
     config: ConfigService<Env, true>,
   ) {
     this.maxBytes = config.get('MAX_UPLOAD_MB', { infer: true }) * MB;
@@ -255,6 +257,59 @@ export class FilesService {
   }
 
   /**
+   * Material attached to one lesson.
+   *
+   * Reachability is the lesson's, which `LessonsService` already decides — a tutor
+   * reaches their own lessons and an admin the school's. One rule, one place,
+   * exactly as a student's documents borrow `StudentsService.findOne`.
+   */
+  async listForLesson(user: User, lessonId: string): Promise<File[]> {
+    const lesson = await this.lessons.findReachable(user, lessonId);
+
+    return this.prisma.file.findMany({
+      where: { lessonId: lesson.id },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Stores material against a lesson.
+   *
+   * Same write order as the other two: the row first, so a failed upload leaves
+   * something findable rather than bytes nothing knows about.
+   */
+  async uploadForLesson(
+    user: User,
+    lessonId: string,
+    incoming: IncomingFile,
+  ): Promise<File> {
+    const lesson = await this.lessons.findReachable(user, lessonId);
+    this.assertAcceptable(incoming);
+    await this.assertWithinQuota(lesson.schoolId, incoming.size);
+
+    const row = await this.prisma.file.create({
+      data: {
+        storageKey: 'pending',
+        originalName: incoming.originalName.slice(0, 255),
+        mimeType: incoming.mimeType,
+        sizeBytes: incoming.size,
+        purpose: FilePurpose.LESSON_ATTACHMENT,
+        schoolId: lesson.schoolId,
+        uploadedById: user.id,
+        lessonId: lesson.id,
+      },
+    });
+
+    const storageKey = this.storage.keyFor(lesson.schoolId, row.id);
+    await this.storage.save(storageKey, incoming.buffer);
+
+    return this.prisma.file.update({
+      where: { id: row.id },
+      data: { storageKey, uploadedAt: new Date() },
+    });
+  }
+
+  /**
    * A file this caller may see.
    *
    * Reachability is decided by the student it belongs to, which is the same
@@ -270,6 +325,9 @@ export class FilesService {
     }
     if (file.studentId) {
       await this.students.findOne(user, file.studentId);
+    }
+    if (file.lessonId) {
+      await this.lessons.findReachable(user, file.lessonId);
     }
     // A personal library belongs to the person. An admin can still reach one —
     // they are accountable for what is stored on the school's account — but a

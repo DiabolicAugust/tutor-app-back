@@ -7,6 +7,7 @@ import { UserRole } from '../generated/prisma/enums';
 import { TEST_UPLOADS_DIR } from './support/env';
 import {
   authHeader,
+  makeLesson,
   makeSchool,
   makeStudent,
   makeUser,
@@ -574,6 +575,158 @@ describe('Student files', () => {
           contentType: 'application/pdf',
         })
         .expect(201);
+    });
+  });
+
+  describe("a lesson's material", () => {
+    /** A lesson, its tutor, and the school they are both in. */
+    async function seedLesson() {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      const lesson = await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: new Date(),
+      });
+
+      return { school, tutor, student, lesson };
+    }
+
+    it('is stored against the lesson and comes back with it', async () => {
+      const { lesson, tutor } = await seedLesson();
+      const header = await authHeader(test, tutor);
+
+      const created = await request(test.server)
+        .post(`/api/lessons/${lesson.id}/files`)
+        .set(header)
+        .attach('file', pdf('the worksheet'), {
+          filename: 'unit-5.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      expect(created.body).toMatchObject({
+        originalName: 'unit-5.pdf',
+        purpose: 'LESSON_ATTACHMENT',
+        lessonId: lesson.id,
+      });
+
+      const listed = await request(test.server)
+        .get(`/api/lessons/${lesson.id}/files`)
+        .set(header)
+        .expect(200);
+
+      expect(listed.body).toHaveLength(1);
+      expect(listed.body[0].id).toBe(created.body.id);
+    });
+
+    it("does not appear among the student's own documents", async () => {
+      const { lesson, student, tutor } = await seedLesson();
+      const header = await authHeader(test, tutor);
+
+      await request(test.server)
+        .post(`/api/lessons/${lesson.id}/files`)
+        .set(header)
+        .attach('file', pdf('handed out in class'), {
+          filename: 'worksheet.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      // A group lesson hands the same sheet to everybody, so it belongs to the
+      // hour rather than to any one person's file.
+      const documents = await request(test.server)
+        .get(`/api/students/${student.id}/files`)
+        .set(header)
+        .expect(200);
+
+      expect(documents.body).toHaveLength(0);
+    });
+
+    it("is hidden from a colleague, like the lesson itself", async () => {
+      const { school, lesson, tutor } = await seedLesson();
+      const colleague = await makeUser(test, { school });
+
+      await request(test.server)
+        .post(`/api/lessons/${lesson.id}/files`)
+        .set(await authHeader(test, tutor))
+        .attach('file', pdf('mine'), {
+          filename: 'mine.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      // Not-found, not forbidden: the lesson answers the same way, and this
+      // borrows that rule rather than inventing a second one.
+      await request(test.server)
+        .get(`/api/lessons/${lesson.id}/files`)
+        .set(await authHeader(test, colleague))
+        .expect(404);
+    });
+
+    it('is reachable by an admin, like the lesson itself', async () => {
+      const { school, lesson, tutor } = await seedLesson();
+      const admin = await makeUser(test, { school, role: UserRole.ADMIN });
+
+      await request(test.server)
+        .post(`/api/lessons/${lesson.id}/files`)
+        .set(await authHeader(test, tutor))
+        .attach('file', pdf('theirs'), {
+          filename: 'theirs.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      const listed = await request(test.server)
+        .get(`/api/lessons/${lesson.id}/files`)
+        .set(await authHeader(test, admin))
+        .expect(200);
+
+      expect(listed.body).toHaveLength(1);
+    });
+
+    it("cannot be reached from another school", async () => {
+      const { lesson } = await seedLesson();
+      const other = await makeSchool(test);
+      const stranger = await makeUser(test, { school: other });
+
+      await request(test.server)
+        .get(`/api/lessons/${lesson.id}/files`)
+        .set(await authHeader(test, stranger))
+        .expect(404);
+
+      await request(test.server)
+        .post(`/api/lessons/${lesson.id}/files`)
+        .set(await authHeader(test, stranger))
+        .attach('file', pdf('borrowed'), {
+          filename: 'borrowed.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(404);
+    });
+
+    it('goes when the lesson goes', async () => {
+      const { lesson, tutor } = await seedLesson();
+
+      const created = await request(test.server)
+        .post(`/api/lessons/${lesson.id}/files`)
+        .set(await authHeader(test, tutor))
+        .attach('file', pdf('transient'), {
+          filename: 'transient.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      await test.prisma.lesson.delete({ where: { id: lesson.id } });
+
+      // The row cascades. A file pointing at a lesson that no longer exists is
+      // unreachable and nothing would ever collect it.
+      const left = await test.prisma.file.findUnique({
+        where: { id: created.body.id },
+      });
+      expect(left).toBeNull();
     });
   });
 });

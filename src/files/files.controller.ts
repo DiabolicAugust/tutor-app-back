@@ -84,6 +84,35 @@ export class FilesController {
   }
 
   /**
+   * Material for one lesson: the worksheet handed out, the slides, a recording.
+   *
+   * Nested under the lesson, like notes and grades are, because that is what
+   * decides who may see it — the lesson's own reachability rule and no second one.
+   */
+  @Get('lessons/:lessonId/files')
+  listForLesson(@CurrentUser() user: User, @Param('lessonId') lessonId: string) {
+    return this.files.listForLesson(user, lessonId);
+  }
+
+  @Post('lessons/:lessonId/files')
+  @ThrottleUpload()
+  @UseInterceptors(FileInterceptor('file'))
+  uploadForLesson(
+    @CurrentUser() user: User,
+    @Param('lessonId') lessonId: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+  ) {
+    if (!file) throw new BadRequestException('No file was sent');
+
+    return this.files.uploadForLesson(user, lessonId, {
+      originalName: file.originalname,
+      mimeType: file.mimetype,
+      size: file.size,
+      buffer: file.buffer,
+    });
+  }
+
+  /**
    * Streams the file back.
    *
    * `attachment` rather than `inline`: these are uploads from people outside the
