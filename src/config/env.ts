@@ -64,16 +64,25 @@ const envSchema = z.object({
   /**
    * How push notifications leave the server.
    *
-   * `log` writes them to the server log instead of sending — the only supported
-   * value until credentials exist, and what makes the whole path testable with no
-   * Firebase project and no device.
+   * `log` writes them to the server log instead of sending, which is what makes
+   * the whole path testable with no Firebase project and no device.
+   *
+   * `fcm` talks to Firebase Cloud Messaging directly. Deliberately not through
+   * Expo's push service: that would mean an Expo account, a second copy of these
+   * same credentials held by somebody else, and their rate limits, for a hop that
+   * adds nothing — the app registers its native FCM token, so there is no
+   * translation to do.
    */
-  PUSH_TRANSPORT: z.enum(['log', 'expo']).default('log'),
+  PUSH_TRANSPORT: z.enum(['log', 'fcm']).default('log'),
   /**
-   * Optional Expo access token, for a project with "enhanced security" enabled.
-   * Sending works without one for most projects.
+   * A Google service-account key, as JSON.
+   *
+   * The whole file rather than a path: the host this runs on has an ephemeral
+   * filesystem and an environment, and only one of those survives a deploy.
+   * Required when `PUSH_TRANSPORT=fcm`; the project id is read from it, so there
+   * is no second variable to keep in step.
    */
-  EXPO_ACCESS_TOKEN: z.string().optional(),
+  FCM_SERVICE_ACCOUNT: z.string().optional(),
   /**
    * Largest accepted upload.
    *
@@ -114,6 +123,18 @@ export function validateEnv(raw: Record<string, unknown>): Env {
       )
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
+  }
+
+  if (
+    result.data.PUSH_TRANSPORT === 'fcm' &&
+    !result.data.FCM_SERVICE_ACCOUNT
+  ) {
+    throw new Error(
+      [
+        'Invalid environment configuration:',
+        '  - FCM_SERVICE_ACCOUNT: required when PUSH_TRANSPORT=fcm',
+      ].join('\n'),
+    );
   }
 
   if (result.data.STORAGE_DRIVER === 's3') {
