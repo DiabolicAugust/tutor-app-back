@@ -1,16 +1,17 @@
 # Render Blueprint — the service and its database as code rather than as clicks.
 #
-# Two things here are not obvious and both cost a failed deploy if left out.
+# The build is one npm script rather than a chain typed in here, because two of
+# its steps are easy to get wrong and the failure is a dead deploy:
 #
-# `npm ci --include=dev` is deliberate: `nest build` comes from `@nestjs/cli`,
-# which is a devDependency. If `NODE_ENV=production` is set — and it is, below,
-# because the app should run in production mode — npm skips devDependencies and
-# the build fails with a missing `nest`. The flag overrides that for the build
-# step only; what ships is still the compiled `dist`.
+#   - `npm ci --include=dev`, because `nest build` comes from `@nestjs/cli`, a
+#     devDependency. With `NODE_ENV=production` set — and it is, below — npm
+#     skips devDependencies and the build dies on `nest: not found`.
+#   - `db:generate` before `build`, because the Prisma client is written to
+#     `generated/prisma`, which is gitignored: a fresh clone has no client to
+#     compile against.
 #
-# `db:generate` before `build` is also deliberate: the Prisma client is written
-# to `generated/prisma`, which is gitignored, so a fresh clone has no client at
-# all and TypeScript cannot compile against it.
+# Keeping it in `package.json` means the command is reviewed with the code
+# instead of living in a dashboard field where a dropped flag is invisible.
 services:
   - type: web
     name: tutor-app-back
@@ -20,7 +21,7 @@ services:
     # feature. Failing here stops the deploy, which is the behaviour wanted:
     # a server that boots against an un-migrated database is worse than one
     # that does not boot.
-    buildCommand: npm ci --include=dev && npm run db:generate && npm run db:deploy && npm run build
+    buildCommand: npm run render:build
     startCommand: npm run start:prod
     healthCheckPath: /api/health
     envVars:

@@ -372,28 +372,32 @@ Re-running the seed deletes and recreates the demo school, so it is safe to repe
 ## Deploying
 
 `render.yaml` describes the service and its database, so a Render Blueprint
-deploy needs no dashboard clicking beyond the secrets. The same commands work
-anywhere:
+deploy needs no dashboard clicking beyond the secrets.
+
+**Build command:** `npm run render:build`
+**Start command:** `npm run start:prod`
+
+The build is one script rather than a chain pasted into a dashboard, because two
+of its steps are easy to drop and the failure is a dead deploy:
 
 ```bash
 npm ci --include=dev          # devDependencies are needed to build
 npm run db:generate           # the Prisma client is gitignored
 npm run db:deploy             # apply migrations
 npm run build
-npm run start:prod
 ```
 
-Three of those lines are load-bearing and each one is a deploy that fails
-without it:
-
 - **`--include=dev`** — `nest build` comes from `@nestjs/cli`, a devDependency.
-  With `NODE_ENV=production` set, npm skips devDependencies and the build dies
-  on a missing `nest`. What ships is still only the compiled `dist`.
+  With `NODE_ENV=production` set, npm skips devDependencies and the build dies on
+  `nest: not found`. The flag applies to the build step only; what ships is still
+  the compiled `dist`.
 - **`db:generate` before `build`** — the client is written to
   `generated/prisma`, which is not in version control, so a fresh clone has
   nothing to compile against.
 - **`db:deploy` before the server starts** — a server that boots against an
   un-migrated database is worse than one that refuses to boot.
+- **`&&`, not `;`** — chained with semicolons a failed migration still lets the
+  deploy continue, and the first sign of trouble is a 500 at runtime.
 
 Node is pinned in `.nvmrc` and `engines`. Left unpinned, the platform picks its
 own default, and Prisma 7 on an older Node fails in a way that reads like a code

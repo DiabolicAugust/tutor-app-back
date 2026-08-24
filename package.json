@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "nest build",
+    "render:build": "npm ci --include=dev && npm run db:generate && npm run db:deploy && npm run build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
