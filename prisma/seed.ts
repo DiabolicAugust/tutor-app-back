@@ -3,7 +3,12 @@ import 'dotenv/config';
 import * as bcrypt from 'bcrypt';
 
 import { PrismaClient } from '../generated/prisma/client';
-import { AddonKey, LessonStatus, NotificationKind, UserRole } from '../generated/prisma/enums';
+import {
+  AddonKey,
+  LessonStatus,
+  NotificationKind,
+  UserRole,
+} from '../generated/prisma/enums';
 
 /**
  * Development seed.
@@ -91,28 +96,88 @@ async function main(): Promise<void> {
     }),
   ]);
 
+  // What the school teaches, and one thing it used to.
+  //
+  // The retired subject is not decoration. It is the state this model exists for
+  // — nothing can be booked in it any more, and the lesson below still says it
+  // was taught. Without one in the seed the only way to reach that screen is to
+  // hide something by hand first.
+  const [algebra, english, geometry, mathematics, physics, chemistry] =
+    await Promise.all(
+      (
+        [
+          ['Algebra', null],
+          ['English', null],
+          ['Geometry', null],
+          ['Mathematics', null],
+          ['Physics', null],
+          ['Chemistry', new Date()],
+        ] as const
+      ).map(([name, hiddenAt]) =>
+        prisma.subject.create({
+          data: { name, hiddenAt, schoolId: school.id },
+        }),
+      ),
+    );
+
   const students = await Promise.all(
     [
-      { name: 'Petro Melnyk', subject: 'Algebra', paidLessonsLeft: 1, tutorId: anna.id },
-      { name: 'Sofia Bondar', subject: 'Geometry', paidLessonsLeft: 8, tutorId: anna.id },
-      { name: 'Maksym Zhuk', subject: 'Mathematics', paidLessonsLeft: 5, tutorId: anna.id },
-      { name: 'Ivan Shevchenko', subject: 'Mathematics', paidLessonsLeft: 12, tutorId: anna.id },
-      { name: 'Mariia Tkachenko', subject: 'Mathematics', paidLessonsLeft: 4, tutorId: anna.id },
-      { name: 'Daria Sydorenko', subject: 'English', paidLessonsLeft: 3, tutorId: olena.id },
-      { name: 'Ihor Palii', subject: 'Physics', paidLessonsLeft: 9, tutorId: taras.id },
+      {
+        name: 'Petro Melnyk',
+        subjectId: algebra.id,
+        paidLessonsLeft: 1,
+        tutorId: anna.id,
+      },
+      {
+        name: 'Sofia Bondar',
+        subjectId: geometry.id,
+        paidLessonsLeft: 8,
+        tutorId: anna.id,
+      },
+      {
+        name: 'Maksym Zhuk',
+        subjectId: mathematics.id,
+        paidLessonsLeft: 5,
+        tutorId: anna.id,
+      },
+      {
+        name: 'Ivan Shevchenko',
+        subjectId: mathematics.id,
+        paidLessonsLeft: 12,
+        tutorId: anna.id,
+      },
+      {
+        name: 'Mariia Tkachenko',
+        subjectId: mathematics.id,
+        paidLessonsLeft: 4,
+        tutorId: anna.id,
+      },
+      {
+        name: 'Daria Sydorenko',
+        subjectId: english.id,
+        paidLessonsLeft: 3,
+        tutorId: olena.id,
+      },
+      {
+        name: 'Ihor Palii',
+        subjectId: physics.id,
+        paidLessonsLeft: 9,
+        tutorId: taras.id,
+      },
     ].map((student) =>
       prisma.student.create({ data: { ...student, schoolId: school.id } }),
     ),
   );
 
-  const byName = (name: string) => students.find((student) => student.name === name)!;
+  const byName = (name: string) =>
+    students.find((student) => student.name === name)!;
 
   await prisma.lesson.createMany({
     data: [
       // Already ended and still scheduled: the app turns this into a
       // "did this take place?" notification.
       {
-        subject: 'Algebra',
+        subjectId: algebra.id,
         startsAt: hoursFromNow(-1, -30),
         durationMinutes: 45,
         tutorId: anna.id,
@@ -121,7 +186,7 @@ async function main(): Promise<void> {
       },
       // Within the hour: becomes "starting soon".
       {
-        subject: 'Geometry',
+        subjectId: geometry.id,
         startsAt: hoursFromNow(1),
         durationMinutes: 90,
         tutorId: anna.id,
@@ -130,7 +195,7 @@ async function main(): Promise<void> {
       },
       // Same slot on a colleague's calendar: exercises overlap columns and filters.
       {
-        subject: 'English',
+        subjectId: english.id,
         startsAt: hoursFromNow(1),
         durationMinutes: 60,
         tutorId: olena.id,
@@ -138,7 +203,7 @@ async function main(): Promise<void> {
         schoolId: school.id,
       },
       {
-        subject: 'Mathematics',
+        subjectId: mathematics.id,
         startsAt: hoursFromNow(7),
         durationMinutes: 60,
         status: LessonStatus.CANCELLED,
@@ -147,7 +212,7 @@ async function main(): Promise<void> {
         schoolId: school.id,
       },
       {
-        subject: 'Mathematics',
+        subjectId: mathematics.id,
         startsAt: onDay(-1, 13),
         durationMinutes: 60,
         status: LessonStatus.COMPLETED,
@@ -156,7 +221,7 @@ async function main(): Promise<void> {
         schoolId: school.id,
       },
       {
-        subject: 'Mathematics',
+        subjectId: mathematics.id,
         startsAt: onDay(1, 9, 30),
         durationMinutes: 60,
         tutorId: anna.id,
@@ -164,9 +229,21 @@ async function main(): Promise<void> {
         schoolId: school.id,
       },
       {
-        subject: 'Physics',
+        subjectId: physics.id,
         startsAt: onDay(2, 17),
         durationMinutes: 90,
+        tutorId: taras.id,
+        studentId: byName('Ihor Palii').id,
+        schoolId: school.id,
+      },
+      // Taught in a subject the school has since retired. Nothing can be booked
+      // in Chemistry any more, and this still reads exactly as it did.
+      {
+        subjectId: chemistry.id,
+        startsAt: onDay(-30, 15),
+        durationMinutes: 60,
+        status: LessonStatus.COMPLETED,
+        topic: 'Ionic bonding',
         tutorId: taras.id,
         studentId: byName('Ihor Palii').id,
         schoolId: school.id,
@@ -186,10 +263,18 @@ async function main(): Promise<void> {
   await prisma.userAddon.createMany({
     data: [
       { userId: anna.id, addon: AddonKey.INVITE_TUTORS, enabledById: admin.id },
-      { userId: anna.id, addon: AddonKey.MANAGE_STUDENTS, enabledById: admin.id },
+      {
+        userId: anna.id,
+        addon: AddonKey.MANAGE_STUDENTS,
+        enabledById: admin.id,
+      },
       // Olena manages students but cannot invite, so a test build shows two
       // members with genuinely different capabilities.
-      { userId: olena.id, addon: AddonKey.MANAGE_STUDENTS, enabledById: admin.id },
+      {
+        userId: olena.id,
+        addon: AddonKey.MANAGE_STUDENTS,
+        enabledById: admin.id,
+      },
     ],
   });
 
@@ -197,7 +282,9 @@ async function main(): Promise<void> {
     data: [
       {
         kind: NotificationKind.ADMIN_ANNOUNCEMENT,
-        data: { text: 'Parent-teacher meetings move to Friday. Please keep 15:00-18:00 free.' },
+        data: {
+          text: 'Parent-teacher meetings move to Friday. Please keep 15:00-18:00 free.',
+        },
         recipientId: anna.id,
       },
       {
@@ -241,7 +328,9 @@ async function main(): Promise<void> {
     ],
   });
 
-  console.log(`Seeded ${DEMO_SCHOOL_ID}. Password for every account: ${TUTOR_PASSWORD}`);
+  console.log(
+    `Seeded ${DEMO_SCHOOL_ID}. Password for every account: ${TUTOR_PASSWORD}`,
+  );
   console.log(`  tutor: ${anna.email}`);
   console.log(`  admin: ${admin.email}`);
   console.log(`  ${anna.email} holds INVITE_TUTORS + MANAGE_STUDENTS`);

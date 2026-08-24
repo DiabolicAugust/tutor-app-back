@@ -53,7 +53,11 @@ const CONCURRENCY = 10;
  * Anything else may be transient, and deleting a token over a temporary fault
  * silently stops notifying somebody forever.
  */
-const DEAD_TOKEN_ERRORS = new Set(['NOT_FOUND', 'UNREGISTERED', 'INVALID_ARGUMENT']);
+const DEAD_TOKEN_ERRORS = new Set([
+  'NOT_FOUND',
+  'UNREGISTERED',
+  'INVALID_ARGUMENT',
+]);
 
 @Injectable()
 export class PushService {

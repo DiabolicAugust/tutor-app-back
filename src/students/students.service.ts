@@ -6,12 +6,26 @@ import {
 
 import type { User } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { SubjectsService } from '../subjects/subjects.service';
 import type { CreateStudentDto } from './dto/create-student.dto';
 import type { UpdateStudentDto } from './dto/update-student.dto';
 
+/**
+ * The subject comes back as the row rather than a name, because the app needs
+ * both halves: the name to show, and the id to preselect in the picker when the
+ * student is edited. `hiddenAt` travels with it so a form can keep offering a
+ * retired subject to the one student who still studies it.
+ */
+const WITH_SUBJECT = {
+  subject: { select: { id: true, name: true, hiddenAt: true } },
+} as const;
+
 @Injectable()
 export class StudentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subjects: SubjectsService,
+  ) {}
 
   /**
    * The students a tutor may book for.
@@ -27,11 +41,15 @@ export class StudentsService {
           ? { schoolId: user.schoolId }
           : { schoolId: user.schoolId, tutorId: user.id },
       orderBy: { name: 'asc' },
+      include: WITH_SUBJECT,
     });
   }
 
   async findOne(user: User, id: string) {
-    const student = await this.prisma.student.findUnique({ where: { id } });
+    const student = await this.prisma.student.findUnique({
+      where: { id },
+      include: WITH_SUBJECT,
+    });
 
     // Not-found rather than forbidden for another school's row: a 403 would
     // confirm the id exists.
@@ -59,9 +77,22 @@ export class StudentsService {
       where: { id: student.id },
       data: {
         name: dto.name?.trim(),
-        subject: dto.subject?.trim(),
+        // Three cases, and they are all real: absent leaves the subject alone,
+        // null clears it, and an id moves the student. `student.subjectId` is
+        // passed as the current value so an edit to the name alone is not
+        // refused for a subject the school has since retired.
+        ...(dto.subjectId === undefined
+          ? {}
+          : {
+              subjectId: await this.subjects.resolve(
+                user,
+                dto.subjectId,
+                student.subjectId,
+              ),
+            }),
         paidLessonsLeft: dto.paidLessonsLeft,
       },
+      include: WITH_SUBJECT,
     });
   }
 
@@ -77,15 +108,16 @@ export class StudentsService {
     await this.prisma.student.delete({ where: { id: student.id } });
   }
 
-  create(user: User, dto: CreateStudentDto) {
+  async create(user: User, dto: CreateStudentDto) {
     return this.prisma.student.create({
       data: {
         name: dto.name.trim(),
-        subject: dto.subject.trim(),
+        subjectId: await this.subjects.resolve(user, dto.subjectId ?? null),
         paidLessonsLeft: dto.paidLessonsLeft ?? 0,
         schoolId: user.schoolId,
         tutorId: user.id,
       },
+      include: WITH_SUBJECT,
     });
   }
 }

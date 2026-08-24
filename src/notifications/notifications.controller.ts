@@ -17,6 +17,7 @@ import { RequiresAddon } from '../common/decorators/requires-addon.decorator';
 import { AddonGuard } from '../common/guards/addon.guard';
 import { AnnounceDto } from './dto/announce.dto';
 import { NotificationsService } from './notifications.service';
+import { ThrottleBroadcast } from '../common/throttling';
 
 @Controller('notifications')
 @UseGuards(JwtAuthGuard)
@@ -39,6 +40,7 @@ export class NotificationsController {
    * be able to announce without making them an admin.
    */
   @Post('announcements')
+  @ThrottleBroadcast()
   @UseGuards(JwtAuthGuard, AddonGuard)
   @RequiresAddon(AddonKey.BROADCAST_ANNOUNCEMENTS)
   announce(@CurrentUser() user: User, @Body() dto: AnnounceDto) {

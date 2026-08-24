@@ -4,7 +4,6 @@ import {
   IsOptional,
   IsString,
   Max,
-  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -26,9 +25,17 @@ export class CreateLessonDto {
   @IsString()
   groupId?: string;
 
+  /**
+   * What is being taught, as an id from the school's subject list.
+   *
+   * Optional, because the free-text field it replaces accepted a blank and the
+   * app showed such a lesson as simply "Lesson". Making it required here would
+   * refuse bookings this app has always allowed; the form asks for one, which is
+   * where that belongs.
+   */
+  @IsOptional()
   @IsString()
-  @MaxLength(120)
-  subject!: string;
+  subjectId?: string;
 
   /** ISO 8601 instant — the same format the app sends and stores. */
   @IsDateString()

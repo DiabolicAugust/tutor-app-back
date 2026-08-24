@@ -180,7 +180,7 @@ describe('Capabilities', () => {
     await request(test.server)
       .post('/api/students')
       .set(header)
-      .send({ name: 'Student', subject: 'Maths' })
+      .send({ name: 'Student' })
       .expect(201);
     await request(test.server)
       .post('/api/notifications/announcements')

@@ -8,6 +8,7 @@ import {
   makeLesson,
   makeSchool,
   makeStudent,
+  makeSubject,
   makeUser,
 } from './support/factories';
 import { createTestApp, type TestApp } from './support/test-app';
@@ -38,13 +39,14 @@ describe('Lessons', () => {
       const school = await makeSchool(test);
       const tutor = await makeUser(test, { school });
       const student = await makeStudent(test, { school, tutor });
+      const algebra = await makeSubject(test, { school, name: 'Algebra' });
 
       const response = await request(test.server)
         .post('/api/lessons')
         .set(await authHeader(test, tutor))
         .send({
           studentId: student.id,
-          subject: 'Algebra',
+          subjectId: algebra.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 60,
         })
@@ -63,13 +65,14 @@ describe('Lessons', () => {
       const tutor = await makeUser(test, { school });
       const colleague = await makeUser(test, { school });
       const theirs = await makeStudent(test, { school, tutor: colleague });
+      const algebra = await makeSubject(test, { school, name: 'Algebra' });
 
       await request(test.server)
         .post('/api/lessons')
         .set(await authHeader(test, tutor))
         .send({
           studentId: theirs.id,
-          subject: 'Algebra',
+          subjectId: algebra.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 60,
         })
@@ -85,13 +88,15 @@ describe('Lessons', () => {
         school: other,
         tutor: stranger,
       });
+      // The caller's own subject, so the 404 can only be about the student.
+      const algebra = await makeSubject(test, { school, name: 'Algebra' });
 
       await request(test.server)
         .post('/api/lessons')
         .set(await authHeader(test, tutor))
         .send({
           studentId: elsewhere.id,
-          subject: 'Algebra',
+          subjectId: algebra.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 60,
         })
@@ -102,13 +107,14 @@ describe('Lessons', () => {
       const school = await makeSchool(test);
       const tutor = await makeUser(test, { school });
       const student = await makeStudent(test, { school, tutor });
+      const algebra = await makeSubject(test, { school, name: 'Algebra' });
 
       await request(test.server)
         .post('/api/lessons')
         .set(await authHeader(test, tutor))
         .send({
           studentId: student.id,
-          subject: 'Algebra',
+          subjectId: algebra.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 1,
         })
@@ -142,9 +148,9 @@ describe('Lessons', () => {
         .set(await authHeader(test, tutor))
         .expect(200);
 
-      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
-        'Inside',
-      ]);
+      expect(
+        response.body.map((l: { subject: { name: string } }) => l.subject.name),
+      ).toEqual(['Inside']);
     });
 
     it('returns them in the order the day is read', async () => {
@@ -171,10 +177,9 @@ describe('Lessons', () => {
         .set(await authHeader(test, tutor))
         .expect(200);
 
-      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
-        'Earlier',
-        'Later',
-      ]);
+      expect(
+        response.body.map((l: { subject: { name: string } }) => l.subject.name),
+      ).toEqual(['Earlier', 'Later']);
     });
 
     it('includes the student name, which is what the calendar renders', async () => {
@@ -220,9 +225,9 @@ describe('Lessons', () => {
         .set(await authHeader(test, tutor))
         .expect(200);
 
-      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
-        'Mine',
-      ]);
+      expect(
+        response.body.map((l: { subject: { name: string } }) => l.subject.name),
+      ).toEqual(['Mine']);
     });
 
     it("lets a tutor add a colleague's calendar through the filter", async () => {
@@ -244,9 +249,9 @@ describe('Lessons', () => {
         .set(await authHeader(test, tutor))
         .expect(200);
 
-      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
-        'Theirs',
-      ]);
+      expect(
+        response.body.map((l: { subject: { name: string } }) => l.subject.name),
+      ).toEqual(['Theirs']);
     });
 
     it('does not let the filter reach into another school', async () => {
@@ -462,10 +467,9 @@ describe('Lessons', () => {
         .set(await authHeader(test, tutor))
         .expect(200);
 
-      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
-        'Recent',
-        'Older',
-      ]);
+      expect(
+        response.body.map((l: { subject: { name: string } }) => l.subject.name),
+      ).toEqual(['Recent', 'Older']);
     });
 
     it('includes lessons already past, which a date window would have dropped', async () => {
@@ -542,9 +546,9 @@ describe('Lessons', () => {
         .set(await authHeader(test, tutor))
         .expect(200);
 
-      expect(response.body.map((l: { subject: string }) => l.subject)).toEqual([
-        'Theirs',
-      ]);
+      expect(
+        response.body.map((l: { subject: { name: string } }) => l.subject.name),
+      ).toEqual(['Theirs']);
     });
 
     it("is refused for a colleague's student", async () => {
@@ -589,19 +593,22 @@ describe('Lessons', () => {
         name: 'B1 Tuesdays',
         members: [ann, bob],
       });
+      // The same row `makeGroup` just used, read back so the bookings below can
+      // name it by id.
+      const english = await makeSubject(test, { school, name: 'English' });
 
-      return { school, tutor, ann, bob, group };
+      return { school, tutor, ann, bob, group, english };
     }
 
     it('books onto the group rather than any one student', async () => {
-      const { tutor, group } = await seedGroup();
+      const { tutor, group, english } = await seedGroup();
 
       const response = await request(test.server)
         .post('/api/lessons')
         .set(await authHeader(test, tutor))
         .send({
           groupId: group.id,
-          subject: 'English',
+          subjectId: english.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 60,
         })
@@ -617,13 +624,13 @@ describe('Lessons', () => {
     });
 
     it('refuses a lesson for neither a student nor a group', async () => {
-      const { tutor } = await seedGroup();
+      const { tutor, english } = await seedGroup();
 
       await request(test.server)
         .post('/api/lessons')
         .set(await authHeader(test, tutor))
         .send({
-          subject: 'English',
+          subjectId: english.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 60,
         })
@@ -631,7 +638,7 @@ describe('Lessons', () => {
     });
 
     it('refuses a lesson for both at once', async () => {
-      const { tutor, ann, group } = await seedGroup();
+      const { tutor, ann, group, english } = await seedGroup();
 
       await request(test.server)
         .post('/api/lessons')
@@ -639,7 +646,7 @@ describe('Lessons', () => {
         .send({
           studentId: ann.id,
           groupId: group.id,
-          subject: 'English',
+          subjectId: english.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 60,
         })
@@ -647,7 +654,7 @@ describe('Lessons', () => {
     });
 
     it("refuses a colleague's group", async () => {
-      const { school, tutor } = await seedGroup();
+      const { school, tutor, english } = await seedGroup();
       const colleague = await makeUser(test, { school });
       const theirs = await makeGroup(test, { school, tutor: colleague });
 
@@ -656,7 +663,7 @@ describe('Lessons', () => {
         .set(await authHeader(test, tutor))
         .send({
           groupId: theirs.id,
-          subject: 'English',
+          subjectId: english.id,
           startsAt: at(1).toISOString(),
           durationMinutes: 60,
         })
@@ -705,6 +712,67 @@ describe('Lessons', () => {
         .expect(200);
 
       expect(response.body).toHaveLength(0);
+    });
+  });
+
+  describe('what a single request may ask for', () => {
+    it('refuses a window wider than a year and a bit', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+
+      // The window was always required, which is not the same as bounded. This
+      // asks for every lesson a school has ever had, each with its group's whole
+      // membership attached, from an ordinary account.
+      await request(test.server)
+        .get('/api/lessons')
+        .query({
+          from: '1970-01-01T00:00:00.000Z',
+          to: '2100-01-01T00:00:00.000Z',
+        })
+        .set(await authHeader(test, tutor))
+        .expect(400);
+    });
+
+    it('refuses a window that ends before it starts', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+
+      await request(test.server)
+        .get('/api/lessons')
+        .query({ from: at(5).toISOString(), to: at(1).toISOString() })
+        .set(await authHeader(test, tutor))
+        .expect(400);
+    });
+
+    it('still serves the window the calendar actually asks for', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      await makeLesson(test, { school, tutor, student, startsAt: at(3) });
+
+      const response = await request(test.server)
+        .get('/api/lessons')
+        .query({ from: at(0).toISOString(), to: at(31).toISOString() })
+        .set(await authHeader(test, tutor))
+        .expect(200);
+
+      expect(response.body).toHaveLength(1);
+    });
+
+    it('refuses more calendars in one request than a school has people', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+
+      const many = Array.from(
+        { length: 60 },
+        (_, index) => `tutor-${index}`,
+      ).join(',');
+
+      await request(test.server)
+        .get('/api/lessons')
+        .query({ tutorIds: many })
+        .set(await authHeader(test, tutor))
+        .expect(400);
     });
   });
 });

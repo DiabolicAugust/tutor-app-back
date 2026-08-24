@@ -11,7 +11,7 @@ import {
   GradeKind,
   LessonStatus,
 } from '../../generated/prisma/enums';
-import { LessonsService } from '../lessons/lessons.service';
+import { LessonsService, WITH_ATTENDEES } from '../lessons/lessons.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentsService } from '../students/students.service';
 import type { WriteGradeDto } from './dto/write-grade.dto';
@@ -155,22 +155,7 @@ export class GradebookService {
             : {}),
           ...(status !== undefined ? { status } : {}),
         },
-        include: {
-          student: { select: { id: true, name: true } },
-          group: {
-            select: {
-              id: true,
-              name: true,
-              subject: true,
-              level: true,
-              members: {
-                orderBy: { student: { name: 'asc' } },
-                select: { student: { select: { id: true, name: true } } },
-              },
-            },
-          },
-          attendances: true,
-        },
+        include: { ...WITH_ATTENDEES, attendances: true },
       });
     });
   }

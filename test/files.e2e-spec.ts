@@ -13,7 +13,19 @@ import {
 } from './support/factories';
 import { createTestApp, type TestApp } from './support/test-app';
 
-const PDF = Buffer.from('%PDF-1.4 not really a pdf, but the bytes are ours');
+const PDF = pdf('not really a pdf, but the bytes are ours');
+
+/**
+ * A buffer that starts like a PDF.
+ *
+ * Uploads are checked against the *bytes* now, not only the declared type, so a
+ * test that attaches the word "worksheet" as `application/pdf` is rejected —
+ * correctly. Each of these still carries its own text, so an assertion about
+ * which file came back still means something.
+ */
+function pdf(label: string): Buffer {
+  return Buffer.from(`%PDF-1.4 ${label}`);
+}
 
 const exists = (path: string): Promise<boolean> =>
   access(path).then(
@@ -275,7 +287,7 @@ describe('Student files', () => {
       const response = await request(test.server)
         .post('/api/files')
         .set(await authHeader(test, tutor))
-        .attach('file', Buffer.from('worksheet'), {
+        .attach('file', pdf('worksheet'), {
           filename: 'unit-5.pdf',
           contentType: 'application/pdf',
         })
@@ -298,7 +310,7 @@ describe('Student files', () => {
       await request(test.server)
         .post('/api/files')
         .set(await authHeader(test, colleague))
-        .attach('file', Buffer.from('theirs'), {
+        .attach('file', pdf('theirs'), {
           filename: 'theirs.pdf',
           contentType: 'application/pdf',
         })
@@ -321,7 +333,7 @@ describe('Student files', () => {
       await request(test.server)
         .post(`/api/students/${student.id}/files`)
         .set(header)
-        .attach('file', Buffer.from('report'), {
+        .attach('file', pdf('report'), {
           filename: 'report.pdf',
           contentType: 'application/pdf',
         })
@@ -345,7 +357,7 @@ describe('Student files', () => {
       const created = await request(test.server)
         .post('/api/files')
         .set(header)
-        .attach('file', Buffer.from('worksheet bytes'), {
+        .attach('file', pdf('worksheet bytes'), {
           filename: 'unit-5.pdf',
           contentType: 'application/pdf',
         })
@@ -356,7 +368,8 @@ describe('Student files', () => {
         .set(header)
         .expect(200);
 
-      expect(response.body.toString()).toBe('worksheet bytes');
+      // The whole buffer, header included: what went up is what comes back.
+      expect(response.body.toString()).toBe(pdf('worksheet bytes').toString());
     });
 
     it("hides a colleague's library file behind a 404", async () => {
@@ -367,7 +380,7 @@ describe('Student files', () => {
       const created = await request(test.server)
         .post('/api/files')
         .set(await authHeader(test, colleague))
-        .attach('file', Buffer.from('theirs'), {
+        .attach('file', pdf('theirs'), {
           filename: 'theirs.pdf',
           contentType: 'application/pdf',
         })
@@ -388,7 +401,7 @@ describe('Student files', () => {
       const created = await request(test.server)
         .post('/api/files')
         .set(await authHeader(test, tutor))
-        .attach('file', Buffer.from('worksheet'), {
+        .attach('file', pdf('worksheet'), {
           filename: 'unit-5.pdf',
           contentType: 'application/pdf',
         })
@@ -422,7 +435,7 @@ describe('Student files', () => {
       const created = await request(test.server)
         .post('/api/files')
         .set(header)
-        .attach('file', Buffer.from('worksheet'), {
+        .attach('file', pdf('worksheet'), {
           filename: 'unit-5.pdf',
           contentType: 'application/pdf',
         })
@@ -439,6 +452,128 @@ describe('Student files', () => {
         .expect(200);
 
       expect(response.body).toHaveLength(0);
+    });
+  });
+
+  describe('what it refuses to store', () => {
+    it('rejects bytes that are not the type they claim to be', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+
+      // A Windows executable, announced as a PNG. The declared type is on the
+      // allow-list, so this is exactly the upload the list alone would take.
+      await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, tutor))
+        .attach('file', Buffer.from('MZ\u0090\u0000\u0003 this is a program'), {
+          filename: 'holiday.png',
+          contentType: 'image/png',
+        })
+        .expect(415);
+    });
+
+    it('accepts a real one of each type it advertises', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const header = await authHeader(test, tutor);
+
+      const png = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.from('the rest of a png'),
+      ]);
+
+      await request(test.server)
+        .post('/api/files')
+        .set(header)
+        .attach('file', png, {
+          filename: 'chart.png',
+          contentType: 'image/png',
+        })
+        .expect(201);
+
+      // Plain text has no signature to check, so the rule is that it reads as
+      // text at all — which is what keeps "text/plain" from being the way in.
+      await request(test.server)
+        .post('/api/files')
+        .set(header)
+        .attach('file', Buffer.from('homework, in words'), {
+          filename: 'notes.txt',
+          contentType: 'text/plain',
+        })
+        .expect(201);
+
+      await request(test.server)
+        .post('/api/files')
+        .set(header)
+        .attach('file', Buffer.from('binary\u0000inside'), {
+          filename: 'notes.txt',
+          contentType: 'text/plain',
+        })
+        .expect(415);
+    });
+
+    it('refuses an upload once the school has used its storage', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+
+      // A row rather than two gigabytes of request body: the quota is summed
+      // from what the school has stored, so this is the same state without the
+      // wait.
+      // Two rows rather than one: `sizeBytes` is a 32-bit integer, so a single
+      // row cannot hold the whole allowance. It does not need to — a real school
+      // reaches the limit in hundreds of files, and no one file may exceed
+      // `MAX_UPLOAD_MB` anyway.
+      await test.prisma.file.createMany({
+        data: [0, 1].map((index) => ({
+          storageKey: `quota-probe-${school.id}-${index}`,
+          originalName: 'archive.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: 1_100 * 1024 * 1024,
+          purpose: 'TUTOR_LIBRARY' as const,
+          schoolId: school.id,
+          uploadedById: tutor.id,
+          uploadedAt: new Date(),
+        })),
+      });
+
+      await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, tutor))
+        .attach('file', pdf('one more'), {
+          filename: 'one-more.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(413);
+    });
+
+    it("counts one school's storage separately from another's", async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const other = await makeSchool(test);
+      const stranger = await makeUser(test, { school: other });
+
+      await test.prisma.file.createMany({
+        data: [0, 1].map((index) => ({
+          storageKey: `quota-probe-${other.id}-${index}`,
+          originalName: 'archive.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: 1_100 * 1024 * 1024,
+          purpose: 'TUTOR_LIBRARY' as const,
+          schoolId: other.id,
+          uploadedById: stranger.id,
+          uploadedAt: new Date(),
+        })),
+      });
+
+      // A neighbour filling their allowance must not stop this school working.
+      await request(test.server)
+        .post('/api/files')
+        .set(await authHeader(test, tutor))
+        .attach('file', pdf('unaffected'), {
+          filename: 'unaffected.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(201);
     });
   });
 });

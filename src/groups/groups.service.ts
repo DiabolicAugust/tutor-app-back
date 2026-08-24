@@ -3,15 +3,22 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { User } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentsService } from '../students/students.service';
+import { SubjectsService } from '../subjects/subjects.service';
 import type { CreateGroupDto, UpdateGroupDto } from './dto/group.dto';
 
 /** The shape every group endpoint returns: the group plus who is in it. */
 const WITH_MEMBERS = {
+  subject: { select: { id: true, name: true, hiddenAt: true } },
   members: {
     orderBy: { student: { name: 'asc' } },
     include: {
       student: {
-        select: { id: true, name: true, subject: true, paidLessonsLeft: true },
+        select: {
+          id: true,
+          name: true,
+          subject: { select: { id: true, name: true, hiddenAt: true } },
+          paidLessonsLeft: true,
+        },
       },
     },
   },
@@ -29,6 +36,7 @@ export class GroupsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly students: StudentsService,
+    private readonly subjects: SubjectsService,
   ) {}
 
   /** Groups the caller may see, members included — the roster screen's one call. */
@@ -65,11 +73,11 @@ export class GroupsService {
     return group;
   }
 
-  create(user: User, dto: CreateGroupDto) {
+  async create(user: User, dto: CreateGroupDto) {
     return this.prisma.group.create({
       data: {
         name: dto.name.trim(),
-        subject: dto.subject.trim(),
+        subjectId: await this.subjects.resolve(user, dto.subjectId),
         level: dto.level?.trim() || null,
         schoolId: user.schoolId,
         tutorId: user.id,
@@ -85,7 +93,18 @@ export class GroupsService {
       where: { id: group.id },
       data: {
         name: dto.name?.trim(),
-        subject: dto.subject?.trim(),
+        // No "cleared" case, unlike a student: a group is defined by what it
+        // studies, so an absent subject means unchanged and there is nothing a
+        // client could send to blank it.
+        ...(dto.subjectId === undefined
+          ? {}
+          : {
+              subjectId: await this.subjects.resolve(
+                user,
+                dto.subjectId,
+                group.subjectId,
+              ),
+            }),
         // Distinguishes "not mentioned" from "cleared": only an explicitly sent
         // empty string blanks the level.
         ...(dto.level === undefined ? {} : { level: dto.level.trim() || null }),

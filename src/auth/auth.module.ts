@@ -23,6 +23,9 @@ import { JwtStrategy } from './jwt.strategy';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
-  exports: [AuthService],
+  // `JwtModule` is exported, not only used: the global rate limiter has to
+  // verify a token itself to know whose allowance to spend, because it runs
+  // before anything has authenticated the request.
+  exports: [AuthService, JwtModule],
 })
 export class AuthModule {}

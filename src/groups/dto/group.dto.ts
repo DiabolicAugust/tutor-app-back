@@ -7,10 +7,15 @@ export class CreateGroupDto {
   @MaxLength(120)
   name!: string;
 
+  /**
+   * What the group studies, as an id from the school's list.
+   *
+   * Required, as the free-text field it replaces was: a group is defined by its
+   * subject, and one without it has nothing to prefill a booking with.
+   */
   @IsString()
   @MinLength(1)
-  @MaxLength(120)
-  subject!: string;
+  subjectId!: string;
 
   /**
    * Free text rather than an enum: "B1", "Beginners", "Year 9" are all real
@@ -33,8 +38,7 @@ export class UpdateGroupDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
-  @MaxLength(120)
-  subject?: string;
+  subjectId?: string;
 
   @IsOptional()
   @IsString()

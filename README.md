@@ -168,6 +168,73 @@ surfacing as a 500 the first time someone signs in.
 **Validation is global and strict.** `whitelist` strips undeclared properties and
 `forbidNonWhitelisted` rejects them, so a client cannot smuggle fields past a DTO.
 
+## Standing up to abuse
+
+Anybody who installs the app can read the API address out of it and send whatever they
+like. So the assumption here is a hostile client that holds a valid token, and the
+question is what it can cost us.
+
+**Rate limits are global and count the caller, not the address.** `ThrottlerByCallerGuard`
+is registered as an `APP_GUARD`, so a route added tomorrow is limited without anybody
+remembering to say so — the opposite way round from the authentication guard, and
+deliberately: a missing auth guard is noticed by the first person who tries the route
+without a token, while a missing rate limit is noticed by nobody until it is used.
+
+Requests with a valid token are counted per **account**, everything else per **address**.
+A tutoring school is several people on one office connection, and counting them together
+means the fifth to arrive finds the allowance spent. The guard verifies the token itself
+rather than reading `request.user`, because global guards run before the per-controller
+`JwtAuthGuard` and `request.user` is empty at that point — and it *verifies* rather than
+decodes, because an unverified `sub` is a value the caller picks, which would let a client
+mint itself a fresh allowance per request.
+
+Two windows apply at once, a minute and an hour: one alone either permits a slow grind or
+a damaging burst. `common/throttling.ts` holds the numbers, and the tightest belong to
+signing in — every attempt spends a bcrypt comparison at cost factor 12, about a quarter
+of a second of processor time, which is what makes a few hundred requests a second enough
+to stop the server answering anybody.
+
+**Uploads are bounded three ways, because each bound misses what the others catch.**
+Multer enforces the per-file size while reading, so the bytes never reach memory — the
+service also checks it, but only after the whole body has been buffered, which stopped
+large files from being *stored* and did nothing to stop them being *received*. A per-school
+quota bounds the total, so an ordinary account cannot fill the disk one allowed file at a
+time. And a rate limit bounds the count, which neither of the other two does.
+
+**A declared content type is not evidence.** `files/file-signatures.ts` reads the first
+bytes and asks whether they are the type the client claimed. The allow-list reads a header
+the client wrote; this is the half that looks at the file, and it is what keeps a store of
+programs and web pages from accumulating inside a school's documents.
+
+**Windows and lists are capped.** `GET /lessons` always required a date window, which is
+not the same as bounding one: nothing stopped a client asking for 1970 to 2100 and
+receiving every lesson a school ever had with each group's full membership attached. The
+window is capped at 400 days and the calendar-filter list at 50.
+
+**Bodies, headers and origins.** JSON is capped at 64 kB — uploads are multipart and
+bounded separately. `helmet` sets the response headers. `trust proxy` is one hop, not
+`true`: `true` would take the leftmost `X-Forwarded-For` value, which the client writes,
+so a caller could claim a new address per request and have no limit at all. `CORS_ORIGINS`
+of `*` is refused at boot in production.
+
+**What the tests cover.** `test/throttling.e2e-spec.ts` builds its own module, because the
+application skips throttling under `NODE_ENV=test` — the rest of the suite signs in
+hundreds of times in half a minute. It proves the parts this repository wrote: that two
+accounts behind one address have separate allowances, and that invented tokens do not each
+get one. The upload signature check, the storage quota and the window cap are covered in
+`files.e2e-spec.ts` and `lessons.e2e-spec.ts`.
+
+**Known and deliberate.** `GET /lessons?tutorIds=` lets any member of a school read a
+colleague's calendar, and with it the names of that colleague's students — which the
+roster endpoint hides from a non-admin tutor. That is the calendar-filters feature working
+as built, not a leak across schools, but the two endpoints disagree about who may see whom
+and that is worth a decision rather than a discovery.
+
+**Not done.** Signing out is client-side only: a token stays valid until it expires, so a
+stolen one is good for as long as `JWT_EXPIRES_IN` says. Making sign-out revoke needs
+something server-side to revoke against — a `sessionsValidFrom` column on the user is the
+cheap version, and rejecting tokens issued before it in `JwtStrategy` is the whole change.
+
 ## Matching the app
 
 Field names deliberately match the client's types, so its `AuthClient` implementation is a

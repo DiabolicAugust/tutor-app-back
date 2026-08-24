@@ -19,6 +19,10 @@ import { AddonGuard } from '../common/guards/addon.guard';
 import { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import { InviteTutorDto } from './dto/invite-tutor.dto';
 import { InvitationsService } from './invitations.service';
+import {
+  ThrottleInvitationLookup,
+  ThrottleRegistration,
+} from '../common/throttling';
 
 /**
  * Two audiences in one resource: a member with the `INVITE_TUTORS` capability
@@ -56,12 +60,14 @@ export class InvitationsController {
 
   /** Public: what the app shows on the invited registration form. */
   @Get('token/:token')
+  @ThrottleInvitationLookup()
   describe(@Param('token') token: string) {
     return this.invitations.describe(token);
   }
 
   /** Public: creates the account and returns a session. */
   @Post('token/:token/accept')
+  @ThrottleRegistration()
   accept(@Param('token') token: string, @Body() dto: AcceptInvitationDto) {
     return this.invitations.accept(token, dto);
   }

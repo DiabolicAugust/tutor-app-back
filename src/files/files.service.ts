@@ -13,6 +13,7 @@ import { FilePurpose } from '../../generated/prisma/enums';
 import type { Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentsService } from '../students/students.service';
+import { bytesLookLike } from './file-signatures';
 import { StorageService } from './storage.service';
 
 /** What a caller hands over: the bytes, plus what the browser said about them. */
@@ -47,6 +48,7 @@ const MB = 1024 * 1024;
 @Injectable()
 export class FilesService {
   private readonly maxBytes: number;
+  private readonly maxSchoolBytes: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -55,6 +57,8 @@ export class FilesService {
     config: ConfigService<Env, true>,
   ) {
     this.maxBytes = config.get('MAX_UPLOAD_MB', { infer: true }) * MB;
+    this.maxSchoolBytes =
+      config.get('MAX_SCHOOL_STORAGE_MB', { infer: true }) * MB;
   }
 
   listForStudent(user: User, studentId: string): Promise<File[]> {
@@ -82,6 +86,7 @@ export class FilesService {
   ): Promise<File> {
     const student = await this.students.findOne(user, studentId);
     this.assertAcceptable(incoming);
+    await this.assertWithinQuota(student.schoolId, incoming.size);
 
     const row = await this.prisma.file.create({
       data: {
@@ -135,6 +140,9 @@ export class FilesService {
    */
   async uploadToLibrary(user: User, incoming: IncomingFile): Promise<File> {
     this.assertAcceptable(incoming);
+    // The same quota, and deliberately the same pool: it is the school's storage
+    // either way, so a personal shelf cannot be the way around the limit.
+    await this.assertWithinQuota(user.schoolId, incoming.size);
 
     const row = await this.prisma.file.create({
       data: {
@@ -189,6 +197,35 @@ export class FilesService {
     await this.storage.remove(file.storageKey);
   }
 
+  /**
+   * Refuses an upload that would take the school past what it may store.
+   *
+   * Summed from the rows rather than kept as a running total on the school: a
+   * counter and the files it counts drift apart the first time a delete fails
+   * halfway, and a wrong counter either locks a school out of its own storage or
+   * stops enforcing anything. The sum is an indexed aggregate over one school's
+   * files, which is cheap at the scale a tutoring school uploads at.
+   *
+   * Counted *before* the write and including the incoming file, so the limit is
+   * a limit rather than something noticed one file too late.
+   */
+  private async assertWithinQuota(
+    schoolId: string,
+    incomingBytes: number,
+  ): Promise<void> {
+    const { _sum } = await this.prisma.file.aggregate({
+      where: { schoolId },
+      _sum: { sizeBytes: true },
+    });
+
+    const stored = _sum.sizeBytes ?? 0;
+    if (stored + incomingBytes > this.maxSchoolBytes) {
+      throw new PayloadTooLargeException(
+        `Your school has used its ${Math.floor(this.maxSchoolBytes / MB)} MB of storage. Remove some files first.`,
+      );
+    }
+  }
+
   private assertAcceptable(incoming: IncomingFile): void {
     if (incoming.size === 0) {
       throw new BadRequestException('That file is empty');
@@ -199,6 +236,18 @@ export class FilesService {
       );
     }
     if (!ALLOWED_MIME_TYPES.has(incoming.mimeType)) {
+      throw new UnsupportedMediaTypeException(
+        `Cannot store a ${incoming.mimeType} file`,
+      );
+    }
+    // The list above trusts a header the client wrote. This does not: it reads
+    // the first bytes and asks whether they are that type at all, which is what
+    // stops a program or a web page being stored as somebody's worksheet.
+    //
+    // Same exception as an unaccepted type, and the same message: from the
+    // outside "we do not store those" is the whole truth, and naming the check
+    // only helps whoever is trying to get past it.
+    if (!bytesLookLike(incoming.mimeType, incoming.buffer)) {
       throw new UnsupportedMediaTypeException(
         `Cannot store a ${incoming.mimeType} file`,
       );

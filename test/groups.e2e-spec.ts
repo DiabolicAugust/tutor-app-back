@@ -6,6 +6,7 @@ import {
   makeGroup,
   makeSchool,
   makeStudent,
+  makeSubject,
   makeUser,
 } from './support/factories';
 import { createTestApp, type TestApp } from './support/test-app';
@@ -32,35 +33,38 @@ describe('Groups', () => {
       addons: [AddonKey.MANAGE_STUDENTS],
     });
     const student = await makeStudent(test, { school, tutor, name: 'Petro' });
+    // A group is created against a subject id now, so the school has to have
+    // one before anything can be booked into it.
+    const english = await makeSubject(test, { school, name: 'English' });
 
-    return { school, tutor, student };
+    return { school, tutor, student, english };
   }
 
   describe('creating one', () => {
     it('starts empty, and trims what was typed', async () => {
-      const { tutor } = await seed();
+      const { tutor, english } = await seed();
 
       const response = await request(test.server)
         .post('/api/groups')
         .set(await authHeader(test, tutor))
-        .send({ name: '  B1 Tuesdays  ', subject: 'English', level: ' B1 ' })
+        .send({ name: '  B1 Tuesdays  ', subjectId: english.id, level: ' B1 ' })
         .expect(201);
 
       expect(response.body).toMatchObject({
         name: 'B1 Tuesdays',
-        subject: 'English',
+        subject: { id: english.id, name: 'English' },
         level: 'B1',
         members: [],
       });
     });
 
     it('stores no level rather than an empty one', async () => {
-      const { tutor } = await seed();
+      const { tutor, english } = await seed();
 
       const response = await request(test.server)
         .post('/api/groups')
         .set(await authHeader(test, tutor))
-        .send({ name: 'Conversation', subject: 'English', level: '  ' })
+        .send({ name: 'Conversation', subjectId: english.id, level: '  ' })
         .expect(201);
 
       expect(response.body.level).toBeNull();
@@ -69,23 +73,27 @@ describe('Groups', () => {
     it('needs the capability to manage students', async () => {
       const school = await makeSchool(test);
       const tutor = await makeUser(test, { school });
+      // A body the pipe would accept, so the refusal can only be about the
+      // capability. Sent deliberately rather than relying on guards running
+      // before validation.
+      const english = await makeSubject(test, { school, name: 'English' });
 
       // Putting students into groups *is* managing students, so it is gated on
       // the same addon rather than one of its own.
       await request(test.server)
         .post('/api/groups')
         .set(await authHeader(test, tutor))
-        .send({ name: 'Nope', subject: 'English' })
+        .send({ name: 'Nope', subjectId: english.id })
         .expect(403);
     });
 
     it('rejects a group with no name', async () => {
-      const { tutor } = await seed();
+      const { tutor, english } = await seed();
 
       await request(test.server)
         .post('/api/groups')
         .set(await authHeader(test, tutor))
-        .send({ name: '', subject: 'English' })
+        .send({ name: '', subjectId: english.id })
         .expect(400);
     });
   });
@@ -270,7 +278,7 @@ describe('Groups', () => {
 
       expect(response.body).toMatchObject({
         name: 'B1 Thursdays',
-        subject: 'English',
+        subject: { name: 'English' },
         level: 'B1',
       });
     });

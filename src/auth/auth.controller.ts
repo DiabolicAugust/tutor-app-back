@@ -14,6 +14,7 @@ import { AddonsService } from '../addons/addons.service';
 import { AuthService, toAuthUser } from './auth.service';
 import { SignInDto } from './dto/sign-in.dto';
 import { JwtAuthGuard } from './jwt-auth.guard';
+import { ThrottleSignIn } from '../common/throttling';
 
 @Controller('auth')
 export class AuthController {
@@ -25,6 +26,7 @@ export class AuthController {
   /** Returns the app's `Session` verbatim: `{ user, token, issuedAt }`. */
   @Post('sign-in')
   @HttpCode(HttpStatus.OK)
+  @ThrottleSignIn()
   signIn(@Body() dto: SignInDto) {
     return this.auth.signIn(dto);
   }

@@ -20,6 +20,7 @@ import { CreateTutorDto } from './dto/create-tutor.dto';
 import { RegisterSchoolDto } from './dto/register-school.dto';
 import { UpdateSchoolDto } from './dto/update-school.dto';
 import { SchoolsService } from './schools.service';
+import { ThrottleRegistration } from '../common/throttling';
 
 @Controller('schools')
 export class SchoolsController {
@@ -33,6 +34,7 @@ export class SchoolsController {
    * `Session`, so the new admin is signed in on success.
    */
   @Post('register')
+  @ThrottleRegistration()
   register(@Body() dto: RegisterSchoolDto) {
     return this.schools.register(dto);
   }

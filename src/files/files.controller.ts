@@ -20,6 +20,7 @@ import type { User } from '../../generated/prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FilesService } from './files.service';
+import { ThrottleUpload } from '../common/throttling';
 
 /**
  * Documents kept against a student.
@@ -43,6 +44,7 @@ export class FilesController {
   }
 
   @Post('files')
+  @ThrottleUpload()
   @UseInterceptors(FileInterceptor('file'))
   uploadToLibrary(
     @CurrentUser() user: User,
@@ -64,6 +66,7 @@ export class FilesController {
   }
 
   @Post('students/:studentId/files')
+  @ThrottleUpload()
   @UseInterceptors(FileInterceptor('file'))
   upload(
     @CurrentUser() user: User,

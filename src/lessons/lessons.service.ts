@@ -7,6 +7,7 @@ import {
 import type { User } from '../../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentsService } from '../students/students.service';
+import { SubjectsService } from '../subjects/subjects.service';
 import type {
   CreateLessonDto,
   ListLessonsQueryDto,
@@ -19,19 +20,50 @@ const DEFAULT_WINDOW_DAYS = 30;
 const HISTORY_LIMIT = 100;
 
 /**
+ * The widest window a single calendar request may ask for.
+ *
+ * The window was already required, and that alone was not a limit: nothing
+ * stopped a client asking for the year 1970 to 2100, which returns every lesson
+ * a school has ever had, each with its group's full membership attached. One
+ * such request is slow; a few in parallel are a way to keep the database busy
+ * with no credentials beyond an ordinary account.
+ *
+ * A year and a bit — comfortably more than the app asks for, since the widest
+ * view it renders is a month, and enough that a future "this academic year"
+ * screen needs no change here.
+ */
+const MAX_WINDOW_DAYS = 400;
+
+/**
+ * How many calendars one request may overlay.
+ *
+ * The app's filter is a list of colleagues, and a school has tens of them, not
+ * thousands. Without a cap the `IN` list is whatever a client chooses to send.
+ */
+const MAX_TUTOR_FILTERS = 50;
+
+/**
  * What every lesson read carries with it.
  *
  * The group's members come along rather than being fetched on demand, because
  * the calendar renders a group lesson by its name and expands it to the people
  * in it — and a request per block would make expanding feel like loading.
  */
-const WITH_SUBJECT = {
+/**
+ * The lesson shape every endpoint returns: who it is for, and what it teaches.
+ *
+ * Exported because the gradebook returns lessons too, and it returned them with
+ * an include of its own that had drifted a field behind this one. One app type
+ * describes both, so one constant has to build both.
+ */
+export const WITH_ATTENDEES = {
+  subject: { select: { id: true, name: true, hiddenAt: true } },
   student: { select: { id: true, name: true } },
   group: {
     select: {
       id: true,
       name: true,
-      subject: true,
+      subject: { select: { id: true, name: true, hiddenAt: true } },
       level: true,
       members: {
         orderBy: { student: { name: 'asc' } },
@@ -46,6 +78,7 @@ export class LessonsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly students: StudentsService,
+    private readonly subjects: SubjectsService,
   ) {}
 
   /**
@@ -61,10 +94,25 @@ export class LessonsService {
       ? new Date(query.to)
       : new Date(from.getTime() + DEFAULT_WINDOW_DAYS * DAY_MS);
 
+    if (to <= from) {
+      throw new BadRequestException('The window must end after it starts');
+    }
+    if (to.getTime() - from.getTime() > MAX_WINDOW_DAYS * DAY_MS) {
+      throw new BadRequestException(
+        `A calendar window cannot be longer than ${MAX_WINDOW_DAYS} days`,
+      );
+    }
+
     const requestedTutors = query.tutorIds
       ?.split(',')
       .map((id) => id.trim())
       .filter(Boolean);
+
+    if (requestedTutors && requestedTutors.length > MAX_TUTOR_FILTERS) {
+      throw new BadRequestException(
+        `A request cannot ask for more than ${MAX_TUTOR_FILTERS} calendars`,
+      );
+    }
 
     return this.prisma.lesson.findMany({
       where: {
@@ -78,7 +126,7 @@ export class LessonsService {
             : { tutorId: user.id }),
       },
       orderBy: { startsAt: 'asc' },
-      include: WITH_SUBJECT,
+      include: WITH_ATTENDEES,
     });
   }
 
@@ -108,7 +156,7 @@ export class LessonsService {
       orderBy: { startsAt: 'desc' },
       take: limit,
       include: {
-        ...WITH_SUBJECT,
+        ...WITH_ATTENDEES,
         // The count is what the app shows without opening a lesson: whether
         // anybody wrote anything down.
         _count: { select: { notes: true } },
@@ -137,7 +185,7 @@ export class LessonsService {
     }
 
     const common = {
-      subject: dto.subject.trim(),
+      subjectId: await this.subjects.resolve(user, dto.subjectId ?? null),
       startsAt: new Date(dto.startsAt),
       durationMinutes: dto.durationMinutes,
       schoolId: user.schoolId,
@@ -148,14 +196,14 @@ export class LessonsService {
       const group = await this.findReachableGroup(user, dto.groupId);
       return this.prisma.lesson.create({
         data: { ...common, groupId: group.id },
-        include: WITH_SUBJECT,
+        include: WITH_ATTENDEES,
       });
     }
 
     const student = await this.students.findOne(user, dto.studentId!);
     return this.prisma.lesson.create({
       data: { ...common, studentId: student.id },
-      include: WITH_SUBJECT,
+      include: WITH_ATTENDEES,
     });
   }
 
@@ -173,7 +221,7 @@ export class LessonsService {
   async findReachable(user: User, id: string) {
     const lesson = await this.prisma.lesson.findUnique({
       where: { id },
-      include: WITH_SUBJECT,
+      include: WITH_ATTENDEES,
     });
 
     if (!lesson || lesson.schoolId !== user.schoolId) {
@@ -201,7 +249,7 @@ export class LessonsService {
     return this.prisma.lesson.update({
       where: { id: lesson.id },
       data: { status: dto.status },
-      include: WITH_SUBJECT,
+      include: WITH_ATTENDEES,
     });
   }
 

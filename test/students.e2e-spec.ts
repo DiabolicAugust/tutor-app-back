@@ -6,6 +6,7 @@ import {
   makeLesson,
   makeSchool,
   makeStudent,
+  makeSubject,
   makeUser,
 } from './support/factories';
 import { createTestApp, type TestApp } from './support/test-app';
@@ -88,7 +89,7 @@ describe('Students', () => {
       await request(test.server)
         .post('/api/students')
         .set(header)
-        .send({ name: 'New', subject: 'Maths' })
+        .send({ name: 'New' })
         .expect(403);
 
       await request(test.server)
@@ -112,15 +113,19 @@ describe('Students', () => {
         addons: ['MANAGE_STUDENTS'],
       });
 
+      const physics = await makeSubject(test, { school, name: 'Physics' });
+
       const response = await request(test.server)
         .post('/api/students')
         .set(await authHeader(test, tutor))
-        .send({ name: '  Maria  ', subject: ' Physics ', paidLessonsLeft: 8 })
+        .send({ name: '  Maria  ', subjectId: physics.id, paidLessonsLeft: 8 })
         .expect(201);
 
       expect(response.body).toMatchObject({
         name: 'Maria',
-        subject: 'Physics',
+        // The subject comes back as the row, not the word: the app needs the id
+        // to preselect it and the name to show it.
+        subject: { id: physics.id, name: 'Physics' },
         paidLessonsLeft: 8,
         tutorId: tutor.id,
         schoolId: school.id,

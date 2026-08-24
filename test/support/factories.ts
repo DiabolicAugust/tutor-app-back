@@ -4,6 +4,7 @@ import type {
   Prisma,
   School,
   Student,
+  Subject,
   User,
 } from '../../generated/prisma/client';
 import {
@@ -89,20 +90,64 @@ export async function makeUser(
   return user;
 }
 
-export function makeStudent(
+/**
+ * The school's subject with this name, created if it is not there yet.
+ *
+ * An upsert rather than a create, and that is the whole reason this exists: the
+ * factories below default to one subject name, a school cannot hold that name
+ * twice, and two students made without naming a subject have to end up studying
+ * the same one rather than failing on the unique index.
+ *
+ * The factories still take a subject as a *name*, so every test that was written
+ * against the free-text column reads the same. What changed is where the name
+ * ends up.
+ */
+export function makeSubject(
+  { prisma }: TestApp,
+  options: { school: School; name?: string; hiddenAt?: Date | null },
+): Promise<Subject> {
+  return subjectNamed(prisma, options.school, options.name, options.hiddenAt);
+}
+
+async function subjectNamed(
+  prisma: TestApp['prisma'],
+  school: School,
+  name = 'Maths',
+  hiddenAt: Date | null = null,
+): Promise<Subject> {
+  try {
+    return await prisma.subject.upsert({
+      where: { schoolId_name: { schoolId: school.id, name } },
+      update: { hiddenAt },
+      create: { name, hiddenAt, schoolId: school.id },
+    });
+  } catch {
+    // Two factories inside one `Promise.all` can ask for the same subject at the
+    // same instant. The loser of that race wants the row the winner just made,
+    // not a failed test about a unique index it was never checking.
+    return prisma.subject.findFirstOrThrow({
+      where: { schoolId: school.id, name },
+    });
+  }
+}
+
+export async function makeStudent(
   { prisma }: TestApp,
   options: {
     school: School;
     tutor: User;
     name?: string;
+    /** A subject *name*; the row is made or reused as needed. */
     subject?: string;
     paidLessonsLeft?: number;
   },
 ): Promise<Student> {
+  const subject = await subjectNamed(prisma, options.school, options.subject);
+
   return prisma.student.create({
     data: {
       name: options.name ?? unique('student'),
-      subject: options.subject ?? 'Maths',
+      subjectId: subject.id,
       paidLessonsLeft: options.paidLessonsLeft ?? 4,
       schoolId: options.school.id,
       tutorId: options.tutor.id,
@@ -110,7 +155,7 @@ export function makeStudent(
   });
 }
 
-export function makeLesson(
+export async function makeLesson(
   { prisma }: TestApp,
   options: {
     school: School;
@@ -124,9 +169,11 @@ export function makeLesson(
     homework?: string;
   },
 ) {
+  const subject = await subjectNamed(prisma, options.school, options.subject);
+
   return prisma.lesson.create({
     data: {
-      subject: options.subject ?? 'Maths',
+      subjectId: subject.id,
       startsAt: options.startsAt,
       durationMinutes: options.durationMinutes ?? 60,
       schoolId: options.school.id,
@@ -151,10 +198,16 @@ export async function makeGroup(
     members?: Student[];
   },
 ): Promise<Group> {
+  const subject = await subjectNamed(
+    prisma,
+    options.school,
+    options.subject ?? 'English',
+  );
+
   return prisma.group.create({
     data: {
       name: options.name ?? unique('group'),
-      subject: options.subject ?? 'English',
+      subjectId: subject.id,
       level: options.level ?? null,
       schoolId: options.school.id,
       tutorId: options.tutor.id,
@@ -170,7 +223,7 @@ export async function makeGroup(
 }
 
 /** A lesson booked for a group rather than for one student. */
-export function makeGroupLesson(
+export async function makeGroupLesson(
   { prisma }: TestApp,
   options: {
     school: School;
@@ -182,9 +235,15 @@ export function makeGroupLesson(
     status?: LessonStatus;
   },
 ) {
+  const subject = await subjectNamed(
+    prisma,
+    options.school,
+    options.subject ?? 'English',
+  );
+
   return prisma.lesson.create({
     data: {
-      subject: options.subject ?? 'English',
+      subjectId: subject.id,
       startsAt: options.startsAt,
       durationMinutes: options.durationMinutes ?? 60,
       schoolId: options.school.id,

@@ -90,7 +90,22 @@ const envSchema = z.object({
    * disk the server has, and the failure arrives as a full volume rather than a
    * rejected request.
    */
+  /**
+   * The ceiling is not arbitrary. `File.sizeBytes` is a 32-bit integer, so a
+   * single file's recorded size cannot exceed about two gigabytes — and long
+   * before that, a request this process buffers in memory decides how much
+   * memory it needs. Raising this past a hundred means changing both.
+   */
   MAX_UPLOAD_MB: z.coerce.number().int().positive().max(100).default(10),
+  /**
+   * How much one school may store in total.
+   *
+   * The per-file limit bounds a single request; this bounds the account. Without
+   * it an ordinary signed-in user can upload allowed files of allowed size until
+   * the disk or the bill runs out, which is the same denial of service arriving
+   * slowly.
+   */
+  MAX_SCHOOL_STORAGE_MB: z.coerce.number().int().positive().default(2_048),
 });
 
 /**

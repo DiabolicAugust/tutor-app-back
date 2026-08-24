@@ -48,6 +48,7 @@ model School {
   users       User[]
   students    Student[]
   groups      Group[]
+  subjects    Subject[]
   lessons     Lesson[]
   files       File[]
   invitations Invitation[]
@@ -114,13 +115,53 @@ model User {
   @@map("users")
 }
 
+/// Something a school teaches.
+///
+/// A row rather than a word typed onto every student, group and lesson. As a
+/// string the same subject arrived spelled three ways, which made "how many
+/// maths lessons this month" unanswerable and every picker a free-text field
+/// with no right answer in it.
+///
+/// Scoped to a school and only to a school: one school's list must never appear
+/// in another's pickers, which is why this is not a shared table of subject
+/// names.
+model Subject {
+  id        String    @id @default(cuid())
+  name      String
+  /// When it stopped being taught. Null means it is on offer now.
+  ///
+  /// Hidden rather than deleted, because a lesson taught last term still has to
+  /// be able to say what it was about. Deleting the row would either take that
+  /// history with it or leave it pointing at nothing; hiding it takes the
+  /// subject out of every picker and leaves every record that already names it
+  /// exactly as it was.
+  hiddenAt  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  schoolId String
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  students Student[]
+  groups   Group[]
+  lessons  Lesson[]
+
+  /// One school cannot have the same subject twice — that duplication is what
+  /// this model exists to end.
+  ///
+  /// Hidden rows are included on purpose. A hidden "Algebra" next to a new one
+  /// would be two subjects with one name and the history split between them, so
+  /// adding a name that is already hidden offers to bring it back instead.
+  @@unique([schoolId, name])
+  @@index([schoolId])
+  @@map("subjects")
+}
+
 /// Someone being taught. An entity rather than a name on a lesson, because they
 /// have a balance and a history.
 model Student {
   id              String   @id @default(cuid())
   name            String
-  /// What they usually study; prefills the subject when booking.
-  subject         String
   /// Lessons remaining on the current package. Drives payment reminders.
   paidLessonsLeft Int      @default(0)
   createdAt       DateTime @default(now())
@@ -132,6 +173,13 @@ model Student {
   /// The tutor who teaches them; the app books only for its own students.
   tutorId String
   tutor   User   @relation("StudentTutor", fields: [tutorId], references: [id], onDelete: Cascade)
+
+  /// What they usually study; prefills the subject when booking.
+  ///
+  /// Optional, as it was when this was a string: a student can be on the books
+  /// before anybody has settled what they are studying.
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
 
   lessons     Lesson[]
   notes       Note[]
@@ -145,6 +193,7 @@ model Student {
 
   @@index([schoolId])
   @@index([tutorId])
+  @@index([subjectId])
   @@map("students")
 }
 
@@ -191,7 +240,6 @@ enum GradeKind {
 
 model Lesson {
   id              String       @id @default(cuid())
-  subject         String
   startsAt        DateTime
   durationMinutes Int
   status          LessonStatus @default(SCHEDULED)
@@ -203,6 +251,16 @@ model Lesson {
 
   tutorId String
   tutor   User   @relation("LessonTutor", fields: [tutorId], references: [id], onDelete: Cascade)
+
+  /// What is being taught.
+  ///
+  /// Nullable, and deliberately: the app has always accepted a lesson with no
+  /// subject typed in and shown it as just "Lesson". A required column would
+  /// have meant inventing a subject for every such lesson already recorded.
+  /// New lessons are required to name one — that rule belongs in the DTO, where
+  /// it can be enforced without rewriting history to satisfy it.
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
 
   /// The student, for a one-to-one lesson. Null for a group lesson.
   ///
@@ -239,6 +297,8 @@ model Lesson {
   @@index([tutorId, startsAt])
   @@index([schoolId, startsAt])
   @@index([groupId, startsAt])
+  /// Answers "what still teaches this" before a subject is hidden.
+  @@index([subjectId])
   @@map("lessons")
 }
 
@@ -251,8 +311,6 @@ model Lesson {
 model Group {
   id        String   @id @default(cuid())
   name      String
-  /// What the group studies; prefills the subject when booking for it.
-  subject   String
   /// Free text — "B1", "Beginners", "Year 9". Every school names levels its own
   /// way, so a closed list would be wrong for all of them.
   level     String?
@@ -267,11 +325,16 @@ model Group {
   tutorId String
   tutor   User   @relation("GroupTutor", fields: [tutorId], references: [id], onDelete: Cascade)
 
+  /// What the group studies; prefills the subject when booking for it.
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
   members GroupMember[]
   lessons Lesson[]
 
   @@index([schoolId])
   @@index([tutorId])
+  @@index([subjectId])
   @@map("groups")
 }
 

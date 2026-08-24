@@ -15,10 +15,16 @@ export class UpdateStudentDto {
   @MaxLength(120)
   name?: string;
 
+  /**
+   * An id moves the student to that subject; an explicit `null` clears it.
+   *
+   * `@IsOptional()` lets both `undefined` and `null` through, which is what
+   * makes the difference between "not mentioned" and "cleared" expressible at
+   * all — the service reads it, and only a sent `null` blanks the field.
+   */
   @IsOptional()
   @IsString()
-  @MaxLength(120)
-  subject?: string;
+  subjectId?: string | null;
 
   /**
    * Adjusting the balance by hand — what a tutor does after taking payment.
