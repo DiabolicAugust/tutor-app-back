@@ -466,6 +466,20 @@ npm run build
 - **`&&`, not `;`** — chained with semicolons a failed migration still lets the
   deploy continue, and the first sign of trouble is a 500 at runtime.
 
+### What the server now refuses to start without
+
+**`CORS_ORIGINS` must list the allowed origins.** With `NODE_ENV=production` the
+boot fails on `*` rather than serving it, and that is deliberate: a server that
+will not start is a problem somebody fixes in a minute, while a server that
+quietly allowed every origin on the internet is a problem nobody notices. Set it
+to the web build's origin, comma-separated if there is more than one.
+
+The mobile app is unaffected either way — native requests are not subject to CORS
+at all — so this only governs the web build and anything that would like to make
+requests with somebody's browser.
+
+`MAX_SCHOOL_STORAGE_MB` is optional and defaults to 2048.
+
 Node is pinned in `.nvmrc` and `engines`. Left unpinned, the platform picks its
 own default, and Prisma 7 on an older Node fails in a way that reads like a code
 problem.
