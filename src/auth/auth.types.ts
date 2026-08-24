@@ -42,4 +42,14 @@ export type JwtClaims = {
   email: string;
   schoolId: string;
   role: UserRole;
+  /**
+   * The account's token version at the moment this token was issued.
+   *
+   * Compared against the column of the same name on every request: signing out
+   * bumps it, and a token carrying an older number is refused. A token with no
+   * version at all predates this field and is refused too — there is no way to
+   * tell whether it was issued before or after a sign-out, and guessing in the
+   * caller's favour is how a revoked session comes back to life.
+   */
+  ver?: number;
 };

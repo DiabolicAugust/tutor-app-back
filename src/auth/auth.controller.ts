@@ -31,6 +31,20 @@ export class AuthController {
     return this.auth.signIn(dto);
   }
 
+  /**
+   * Ends every session this account holds.
+   *
+   * A request rather than a purely client-side discard, which is what it was: a
+   * token that is only forgotten by the app that held it is still a working key
+   * for as long as it has left to live.
+   */
+  @Post('sign-out')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  signOut(@CurrentUser() user: User) {
+    return this.auth.signOut(user);
+  }
+
   /** Lets a client with a stored token confirm it is still valid. */
   @Get('me')
   @UseGuards(JwtAuthGuard)

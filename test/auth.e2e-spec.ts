@@ -168,4 +168,93 @@ describe('Authentication', () => {
       await request(test.server).get('/api/auth/me').set(header).expect(401);
     });
   });
+
+  describe('signing out', () => {
+    it('ends the session it was called with', async () => {
+      const school = await makeSchool(test);
+      const user = await makeUser(test, { school });
+      const header = await authHeader(test, user);
+
+      await request(test.server).get('/api/auth/me').set(header).expect(200);
+
+      await request(test.server)
+        .post('/api/auth/sign-out')
+        .set(header)
+        .expect(204);
+
+      // The token still verifies — it is signed and unexpired. What changed is
+      // that the account has a revocation instant later than the moment this
+      // token was issued, which is the only thing that can end a JWT early.
+      await request(test.server).get('/api/auth/me').set(header).expect(401);
+    });
+
+    it('ends every session the account holds, not only the caller', async () => {
+      const school = await makeSchool(test);
+      const user = await makeUser(test, { school });
+      const phone = await authHeader(test, user);
+      const tablet = await authHeader(test, user);
+
+      await request(test.server)
+        .post('/api/auth/sign-out')
+        .set(phone)
+        .expect(204);
+
+      // Somebody signing out because a device is lost means all of them.
+      await request(test.server).get('/api/auth/me').set(tablet).expect(401);
+    });
+
+    it('leaves other accounts alone', async () => {
+      const school = await makeSchool(test);
+      const user = await makeUser(test, { school });
+      const colleague = await makeUser(test, { school });
+      const theirs = await authHeader(test, colleague);
+
+      await request(test.server)
+        .post('/api/auth/sign-out')
+        .set(await authHeader(test, user))
+        .expect(204);
+
+      await request(test.server).get('/api/auth/me').set(theirs).expect(200);
+    });
+
+    it('lets the same account sign in again immediately', async () => {
+      const school = await makeSchool(test);
+      const user = await makeUser(test, { school });
+
+      await request(test.server)
+        .post('/api/auth/sign-out')
+        .set(await authHeader(test, user))
+        .expect(204);
+
+      // The case worth a test rather than a comment. `iat` has one-second
+      // resolution, so a token issued in the same second as the sign-out looks
+      // older than the revocation instant and would be refused for its whole
+      // life — a successful sign-in followed by an immediate, unexplained
+      // sign-out. Signing in has to be usable straight away.
+      const session = await signIn(user.email, TEST_PASSWORD).expect(200);
+      const fresh = { Authorization: `Bearer ${session.body.token as string}` };
+
+      await request(test.server).get('/api/auth/me').set(fresh).expect(200);
+    });
+
+    it('still refuses the old token after signing in again', async () => {
+      const school = await makeSchool(test);
+      const user = await makeUser(test, { school });
+      const stolen = await authHeader(test, user);
+
+      await request(test.server)
+        .post('/api/auth/sign-out')
+        .set(stolen)
+        .expect(204);
+      await signIn(user.email, TEST_PASSWORD).expect(200);
+
+      // Signing in must not resurrect what signing out killed: the whole point
+      // was the token on the device that is no longer in its owner's hands.
+      await request(test.server).get('/api/auth/me').set(stolen).expect(401);
+    });
+
+    it('needs a session of its own', async () => {
+      await request(test.server).post('/api/auth/sign-out').expect(401);
+    });
+  });
 });

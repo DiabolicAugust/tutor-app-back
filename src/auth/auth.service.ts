@@ -54,6 +54,10 @@ export class AuthService {
       email: user.email,
       schoolId: user.schoolId,
       role: user.role,
+      // The version as it stands now. Signing in does not bump it, so a second
+      // device does not sign the first one out — which is not what anybody means
+      // by signing in.
+      ver: user.tokenVersion,
     };
 
     return {
@@ -61,6 +65,25 @@ export class AuthService {
       token: this.jwt.sign(claims),
       issuedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Signs the account out everywhere.
+   *
+   * Everywhere, and not only on the device asking: there is no way to name a
+   * single token and no reason to want one. Somebody signing out because a phone
+   * is lost means all of them, and somebody signing out on their own phone loses
+   * nothing by having their tablet ask for a password again.
+   *
+   * An increment rather than a write of a computed value, so two taps racing each
+   * other both end up revoking rather than one overwriting the other with the
+   * same number.
+   */
+  async signOut(user: User): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { tokenVersion: { increment: 1 } },
+    });
   }
 
   static hashPassword(password: string): Promise<string> {

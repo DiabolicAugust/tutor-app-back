@@ -76,6 +76,21 @@ model User {
   passwordHash String
   name         String
   role         UserRole @default(TUTOR)
+  /// Bumped to end every session the account holds.
+  ///
+  /// What makes signing out mean something. A JWT is valid until it expires
+  /// because nothing consults a database to check it — that is the point of one —
+  /// so revoking needs a value on this side to compare against. Each token
+  /// carries the version it was issued under, and the strategy refuses any token
+  /// whose version is not the current one.
+  ///
+  /// A counter rather than a timestamp, and that is the whole design. `iat` has
+  /// one-second resolution, so a revocation instant either lets a token issued
+  /// in the same second survive or refuses the session the user just created —
+  /// with no way to tell those two apart. A counter has no such ambiguity: the
+  /// token issued after the bump carries the new number, every token issued
+  /// before it carries an older one, and nothing depends on a clock.
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

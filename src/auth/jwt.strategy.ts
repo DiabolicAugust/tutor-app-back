@@ -33,6 +33,21 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
     if (!user) throw new UnauthorizedException('Account no longer exists');
 
+    /**
+     * A token issued under an older version is dead.
+     *
+     * This is what makes signing out mean anything. Without it a token is good
+     * until it expires no matter what its owner does, so a phone left behind
+     * keeps full access for days and nobody can do a thing about it.
+     *
+     * Equality, not "at least": the only valid version is the current one. A
+     * token with no version predates the field and is refused, because there is
+     * no way to tell whether it was issued before or after a sign-out.
+     */
+    if (claims.ver !== user.tokenVersion) {
+      throw new UnauthorizedException('This session has been signed out');
+    }
+
     return user;
   }
 }
