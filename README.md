@@ -369,6 +369,94 @@ that way when adding features.
 
 Re-running the seed deletes and recreates the demo school, so it is safe to repeat.
 
+## Deploying
+
+`render.yaml` describes the service and its database, so a Render Blueprint
+deploy needs no dashboard clicking beyond the secrets. The same commands work
+anywhere:
+
+```bash
+npm ci --include=dev          # devDependencies are needed to build
+npm run db:generate           # the Prisma client is gitignored
+npm run db:deploy             # apply migrations
+npm run build
+npm run start:prod
+```
+
+Three of those lines are load-bearing and each one is a deploy that fails
+without it:
+
+- **`--include=dev`** — `nest build` comes from `@nestjs/cli`, a devDependency.
+  With `NODE_ENV=production` set, npm skips devDependencies and the build dies
+  on a missing `nest`. What ships is still only the compiled `dist`.
+- **`db:generate` before `build`** — the client is written to
+  `generated/prisma`, which is not in version control, so a fresh clone has
+  nothing to compile against.
+- **`db:deploy` before the server starts** — a server that boots against an
+  un-migrated database is worse than one that refuses to boot.
+
+Node is pinned in `.nvmrc` and `engines`. Left unpinned, the platform picks its
+own default, and Prisma 7 on an older Node fails in a way that reads like a code
+problem.
+
+### Uploaded files
+
+**Set `STORAGE_DRIVER=s3` on any host with an ephemeral filesystem** — which is
+most PaaS free tiers, Render's included. Files written to local disk there
+disappear on every redeploy, restart and wake-from-idle, while their rows in
+`files` stay behind. Nothing reports an error: the list still shows the file and
+opening it fails.
+
+For AWS S3, four variables and no endpoint:
+
+```
+STORAGE_DRIVER=s3
+S3_BUCKET=your-bucket
+S3_REGION=eu-north-1
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+```
+
+`S3_ENDPOINT` is only for a non-AWS store — Cloudflare R2, Backblaze, MinIO —
+where the SDK cannot derive it from the region. Setting it also switches on
+path-style addressing, which those stores serve and AWS no longer does for
+buckets created since its virtual-host cutover.
+
+The credentials belong to an IAM user, never to the root account, and the policy
+needs exactly what `StorageService` does:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+      "Resource": "arn:aws:s3:::your-bucket/*"
+    }
+  ]
+}
+```
+
+No `ListBucket`: the code never enumerates the store, because the `files` table
+is the record of truth and the bucket is only bytes.
+
+Keep public access blocked. Downloads go through `GET /api/files/:id` behind
+authentication, so the bucket itself never needs to be readable.
+
+`STORAGE_DRIVER=s3` with any of the bucket, key or secret missing is refused at
+**boot**, listing every missing variable at once — the alternative is a server
+that starts happily and loses the first upload somebody cares about.
+
+### Render's free tier, specifically
+
+- A free Postgres instance **expires 30 days after creation**, with a 14-day
+  grace period to upgrade before Render deletes it and its data. Storage is
+  capped at 1 GB.
+- A free web service **cannot have a persistent disk at all**, which is why the
+  object store is not optional there.
+- Free services spin down when idle, so the first request after a pause is slow.
+
 ## Not done yet
 
 - **A user belongs to exactly one school.** A tutor working at two would need a membership

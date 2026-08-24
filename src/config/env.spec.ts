@@ -46,4 +46,72 @@ describe('validateEnv', () => {
   it('names every problem at once, not just the first', () => {
     expect(() => validateEnv({})).toThrow(/DATABASE_URL[\s\S]*JWT_SECRET/);
   });
+
+  describe('storage', () => {
+    it('keeps files on the local disk unless told otherwise', () => {
+      const env = validateEnv({ ...valid });
+
+      expect(env.STORAGE_DRIVER).toBe('local');
+      expect(env.UPLOADS_DIR).toBe('./uploads');
+    });
+
+    it('needs a bucket and credentials before it will use one', () => {
+      // The whole point of checking at boot: a server that starts without these
+      // would accept uploads and lose them, and nothing would report it.
+      expect(() => validateEnv({ ...valid, STORAGE_DRIVER: 's3' })).toThrow(
+        /S3_BUCKET/,
+      );
+    });
+
+    it('names every missing piece at once, not the first one', () => {
+      let message = '';
+      try {
+        validateEnv({ ...valid, STORAGE_DRIVER: 's3', S3_BUCKET: 'fox' });
+      } catch (cause) {
+        message = cause instanceof Error ? cause.message : String(cause);
+      }
+
+      // One boot, one list. Fixing these one redeploy at a time is the failure
+      // mode this avoids.
+      expect(message).toContain('S3_ACCESS_KEY_ID');
+      expect(message).toContain('S3_SECRET_ACCESS_KEY');
+    });
+
+    it('accepts a complete object-store configuration', () => {
+      const env = validateEnv({
+        ...valid,
+        STORAGE_DRIVER: 's3',
+        S3_BUCKET: 'fox-uploads',
+        S3_ENDPOINT: 'https://account.r2.cloudflarestorage.com',
+        S3_ACCESS_KEY_ID: 'key',
+        S3_SECRET_ACCESS_KEY: 'secret',
+      });
+
+      expect(env).toMatchObject({
+        STORAGE_DRIVER: 's3',
+        S3_BUCKET: 'fox-uploads',
+        // Defaulted, because R2 ignores the region but the SDK insists on one.
+        S3_REGION: 'auto',
+      });
+    });
+
+    it('refuses an endpoint that is not a URL', () => {
+      expect(() =>
+        validateEnv({
+          ...valid,
+          STORAGE_DRIVER: 's3',
+          S3_BUCKET: 'fox',
+          S3_ENDPOINT: 'account.r2.cloudflarestorage.com',
+          S3_ACCESS_KEY_ID: 'key',
+          S3_SECRET_ACCESS_KEY: 'secret',
+        }),
+      ).toThrow(/S3_ENDPOINT/);
+    });
+
+    it('does not demand S3 settings for the local driver', () => {
+      expect(() =>
+        validateEnv({ ...valid, STORAGE_DRIVER: 'local' }),
+      ).not.toThrow();
+    });
+  });
 });

@@ -1,0 +1,62 @@
+# Render Blueprint — the service and its database as code rather than as clicks.
+#
+# Two things here are not obvious and both cost a failed deploy if left out.
+#
+# `npm ci --include=dev` is deliberate: `nest build` comes from `@nestjs/cli`,
+# which is a devDependency. If `NODE_ENV=production` is set — and it is, below,
+# because the app should run in production mode — npm skips devDependencies and
+# the build fails with a missing `nest`. The flag overrides that for the build
+# step only; what ships is still the compiled `dist`.
+#
+# `db:generate` before `build` is also deliberate: the Prisma client is written
+# to `generated/prisma`, which is gitignored, so a fresh clone has no client at
+# all and TypeScript cannot compile against it.
+services:
+  - type: web
+    name: tutor-app-back
+    runtime: node
+    plan: free
+    # Migrations run in the build step because a pre-deploy command is a paid
+    # feature. Failing here stops the deploy, which is the behaviour wanted:
+    # a server that boots against an un-migrated database is worse than one
+    # that does not boot.
+    buildCommand: npm ci --include=dev && npm run db:generate && npm run db:deploy && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: tutor-app-db
+          property: connectionString
+      # Generated once by Render and kept; rotating it signs everybody out.
+      - key: JWT_SECRET
+        generateValue: true
+      # Uploads must not go to the local disk: a free web service has an
+      # ephemeral filesystem and cannot have a persistent one attached, so
+      # anything written there is gone on the next redeploy while its database
+      # row stays behind. Set these in the dashboard — an S3-compatible bucket
+      # such as Cloudflare R2 — and the app validates them at boot.
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      # The app's own origins. `*` is the default and is wrong once this is real.
+      - key: CORS_ORIGINS
+        sync: false
+
+databases:
+  - name: tutor-app-db
+    plan: free
+    # A free database expires 30 days after creation, with a 14-day grace period
+    # to upgrade before Render deletes it and its data. Fine for a trial run,
+    # not for anything anybody depends on.
+    databaseName: foxacademy
+    user: foxacademy

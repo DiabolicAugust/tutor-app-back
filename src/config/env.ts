@@ -36,11 +36,31 @@ const envSchema = z.object({
   /**
    * Where uploaded files are kept.
    *
-   * A directory because that is what a single server needs, and object storage
-   * is a different implementation of the same seam rather than a different
-   * shape of configuration — see `storage.service.ts`.
+   * `local` is a directory, which is what a single server needs and what the
+   * tests use. `s3` is any S3-compatible bucket — AWS, Cloudflare R2, Backblaze,
+   * MinIO — and is what a platform with an **ephemeral filesystem** needs:
+   * without it, uploads disappear on every redeploy while their database rows
+   * stay behind, and nothing reports an error.
    */
+  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  /** Used by the `local` driver only. */
   UPLOADS_DIR: z.string().default('./uploads'),
+  /** Bucket name. Required when `STORAGE_DRIVER=s3`; see the check below. */
+  S3_BUCKET: z.string().optional(),
+  /**
+   * Endpoint of the S3-compatible service.
+   *
+   * Omitted for AWS itself, where the SDK derives it from the region. Required
+   * for anything else — R2's looks like
+   * `https://<account-id>.r2.cloudflarestorage.com`.
+   */
+  S3_ENDPOINT: z.string().url().optional(),
+  /**
+   * Region. `auto` for R2, which ignores it but requires a value.
+   */
+  S3_REGION: z.string().default('auto'),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
   /**
    * How push notifications leave the server.
    *
@@ -64,6 +84,20 @@ const envSchema = z.object({
   MAX_UPLOAD_MB: z.coerce.number().int().positive().max(100).default(10),
 });
 
+/**
+ * What `s3` needs on top of choosing it.
+ *
+ * Checked as a cross-field rule rather than by making the fields required,
+ * because they are genuinely optional for the `local` driver — and checked at
+ * *boot* rather than at first use, because the alternative is a server that
+ * starts happily and then fails the first upload somebody actually cares about.
+ */
+const S3_REQUIRED = [
+  'S3_BUCKET',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
+] as const;
+
 export type Env = z.infer<typeof envSchema>;
 
 /**
@@ -80,6 +114,20 @@ export function validateEnv(raw: Record<string, unknown>): Env {
       )
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
+  }
+
+  if (result.data.STORAGE_DRIVER === 's3') {
+    const missing = S3_REQUIRED.filter((key) => !result.data[key]);
+    if (missing.length > 0) {
+      throw new Error(
+        [
+          'Invalid environment configuration:',
+          ...missing.map(
+            (key) => `  - ${key}: required when STORAGE_DRIVER=s3`,
+          ),
+        ].join('\n'),
+      );
+    }
   }
 
   return result.data;

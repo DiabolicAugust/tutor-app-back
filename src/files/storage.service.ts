@@ -1,54 +1,44 @@
-import { createReadStream, type ReadStream } from 'node:fs';
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
-
-import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-
-import type { Env } from '../config/env';
+import type { Readable } from 'node:stream';
 
 /**
  * Where the bytes live.
  *
- * A seam, like `MailService`: the local disk is what a single server needs, and
- * S3 or similar is a different implementation of these four methods rather than
- * a change anywhere else. Nothing above this class knows what a storage key
- * refers to.
+ * An abstract class rather than an interface, so it works as a Nest injection
+ * token: `FilesService` asks for `StorageService` and gets whichever
+ * implementation the configuration chose, with no knowledge of which.
+ *
+ * The seam exists because the answer genuinely differs by deployment. A single
+ * server wants a directory. Anything with an ephemeral filesystem — most
+ * platform-as-a-service free tiers, Render's included — needs object storage, or
+ * uploads vanish on every redeploy while their database rows stay behind. That
+ * failure is silent, which is exactly why the choice is configuration rather
+ * than a rewrite.
  *
  * The `File` table remains the record of truth. Storage holds bytes and cannot
  * tell you who uploaded one, which school it belongs to, or whether anything
  * still references it.
  */
-@Injectable()
-export class StorageService {
-  private readonly logger = new Logger(StorageService.name);
-  private readonly root: string;
-
-  constructor(config: ConfigService<Env, true>) {
-    this.root = resolve(config.get('UPLOADS_DIR', { infer: true }));
-  }
-
+export abstract class StorageService {
   /**
-   * A key that spreads files across directories and cannot collide.
+   * A key that spreads files across prefixes and cannot collide.
    *
    * Sharded by school so one tenant's uploads are removable as a unit, and
    * suffixed with the row id because two people uploading `report.pdf` on the
    * same day must not overwrite each other. The original name is kept in the
-   * database, not here — a name on disk is one more thing that can disagree.
+   * database, not here — a name in the store is one more thing that can
+   * disagree.
+   *
+   * Concrete on the base class because it is the one part that must **not**
+   * differ between implementations: a key written by one has to be readable by
+   * the other, or switching driver would orphan everything already stored.
    */
   keyFor(schoolId: string, fileId: string): string {
     return `${schoolId}/${fileId}`;
   }
 
-  async save(key: string, contents: Buffer): Promise<void> {
-    const path = this.pathFor(key);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, contents);
-  }
+  abstract save(key: string, contents: Buffer): Promise<void>;
 
-  read(key: string): ReadStream {
-    return createReadStream(this.pathFor(key));
-  }
+  abstract read(key: string): Readable | Promise<Readable>;
 
   /**
    * Deletes the bytes, tolerating their absence.
@@ -57,28 +47,5 @@ export class StorageService {
    * leave a database entry nobody can clear, which is a worse state than a
    * missing file.
    */
-  async remove(key: string): Promise<void> {
-    try {
-      await unlink(this.pathFor(key));
-    } catch (cause) {
-      this.logger.warn(
-        `Could not delete ${key}: ${cause instanceof Error ? cause.message : String(cause)}`,
-      );
-    }
-  }
-
-  /**
-   * Resolves a key inside the storage root, and refuses anything that escapes
-   * it — a key is generated here, but this is the one place where a value that
-   * came from outside could turn into a path.
-   */
-  private pathFor(key: string): string {
-    const path = resolve(join(this.root, key));
-
-    if (path !== this.root && !path.startsWith(this.root + sep)) {
-      throw new Error(`Refusing a storage key that escapes the root: ${key}`);
-    }
-
-    return path;
-  }
+  abstract remove(key: string): Promise<void>;
 }

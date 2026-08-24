@@ -157,10 +157,16 @@ export class FilesService {
     });
   }
 
-  /** The row and a stream of its bytes, if this caller may reach it. */
+  /**
+   * The row and a stream of its bytes, if this caller may reach it.
+   *
+   * The stream is awaited here rather than handed on as a promise: the local
+   * driver opens synchronously and an object store does not, and every caller
+   * wants the same thing regardless.
+   */
   async open(user: User, id: string) {
     const file = await this.findReachable(user, id);
-    return { file, stream: this.storage.read(file.storageKey) };
+    return { file, stream: await this.storage.read(file.storageKey) };
   }
 
   /**
