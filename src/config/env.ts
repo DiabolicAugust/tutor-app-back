@@ -17,8 +17,15 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   /** Access token lifetime, as an `ms`-style duration. */
   JWT_EXPIRES_IN: z.string().default('7d'),
-  /** Comma-separated list, or `*` in development. */
-  CORS_ORIGINS: z.string().default('*'),
+  /**
+   * Comma-separated list of origins a browser may call this API from.
+   *
+   * Optional, and what it defaults to depends on where it is running — see
+   * `corsOriginsFor` below. Left as one value with one default, the choice was
+   * between a development default that is wrong in production and a production
+   * requirement that turns every deploy into a dashboard errand.
+   */
+  CORS_ORIGINS: z.string().optional(),
   /**
    * `log` writes emails to the server log instead of sending them — the only
    * supported value until a provider is wired up.
@@ -122,7 +129,29 @@ const S3_REQUIRED = [
   'S3_SECRET_ACCESS_KEY',
 ] as const;
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = Omit<z.infer<typeof envSchema>, 'CORS_ORIGINS'> & {
+  CORS_ORIGINS: string;
+};
+
+/**
+ * What cross-origin access defaults to when nothing says.
+ *
+ * **Production closes.** No browser client exists yet — the mobile app is native,
+ * and native requests are not subject to CORS at all — so an unset variable
+ * should mean "no page may call this", not "any page may". An explicit `*` is
+ * still refused outright: defaulting to closed and *choosing* to be wide open are
+ * different mistakes, and only the second one is worth stopping a boot for.
+ *
+ * **Development opens**, because the web build is served from a different port
+ * and there is nothing to protect on a laptop.
+ */
+function corsOriginsFor(
+  configured: string | undefined,
+  nodeEnv: Env['NODE_ENV'],
+): string {
+  if (configured !== undefined) return configured;
+  return nodeEnv === 'production' ? '' : '*';
+}
 
 /**
  * Parses and validates the environment. Passed to `ConfigModule` as its
@@ -139,6 +168,14 @@ export function validateEnv(raw: Record<string, unknown>): Env {
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${issues}`);
   }
+
+  const env: Env = {
+    ...result.data,
+    CORS_ORIGINS: corsOriginsFor(
+      result.data.CORS_ORIGINS,
+      result.data.NODE_ENV,
+    ),
+  };
 
   if (
     result.data.PUSH_TRANSPORT === 'fcm' &&
@@ -166,5 +203,5 @@ export function validateEnv(raw: Record<string, unknown>): Env {
     }
   }
 
-  return result.data;
+  return env;
 }

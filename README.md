@@ -468,15 +468,15 @@ npm run build
 
 ### What the server now refuses to start without
 
-**`CORS_ORIGINS` must list the allowed origins.** With `NODE_ENV=production` the
-boot fails on `*` rather than serving it, and that is deliberate: a server that
-will not start is a problem somebody fixes in a minute, while a server that
-quietly allowed every origin on the internet is a problem nobody notices. Set it
-to the web build's origin, comma-separated if there is more than one.
+**`CORS_ORIGINS` defaults to nothing in production, and `*` is refused.** An
+unset variable means no page may call this API, which is correct while the only
+client is the mobile app — native requests are not subject to CORS at all. Setting
+it to `*` in production stops the boot instead: defaulting to closed and choosing
+to be wide open are different mistakes, and only the second is worth refusing to
+start over.
 
-The mobile app is unaffected either way — native requests are not subject to CORS
-at all — so this only governs the web build and anything that would like to make
-requests with somebody's browser.
+So a deploy needs nothing here, and the web build needs its origin listed before
+its requests will work. Comma-separated if there is more than one.
 
 `MAX_SCHOOL_STORAGE_MB` is optional and defaults to 2048.
 

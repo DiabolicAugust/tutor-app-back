@@ -103,8 +103,17 @@ export function configureApp(app: INestApplication): INestApplication {
     );
   }
 
+  const allowed = origins
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: origins === '*' ? true : origins.split(',').map((o) => o.trim()),
+    // An empty list is the production default and means no page may call this.
+    // `false` rather than `[]`, because an empty array is not obviously a
+    // decision when read back out of a config object.
+    origin:
+      origins.trim() === '*' ? true : allowed.length > 0 ? allowed : false,
     // No cookies are used — the session travels in an Authorization header — so
     // credentials stay off and a hostile page cannot ride an existing session.
     credentials: false,

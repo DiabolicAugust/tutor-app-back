@@ -49,7 +49,10 @@ services:
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
-      # The app's own origins. `*` is the default and is wrong once this is real.
+      # Origins a browser may call the API from. Deliberately absent rather
+      # than set: unset means "nothing" in production, which is right while the
+      # only client is a native app. Fill it in when the web build goes
+      # somewhere, and never with `*` — the app refuses to boot on that.
       - key: CORS_ORIGINS
         sync: false
 
