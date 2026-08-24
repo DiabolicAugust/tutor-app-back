@@ -404,9 +404,23 @@ Two consequences worth keeping:
 - `User.avatarFileId` and `School.logoFileId` are real foreign keys with `SetNull`, so
   deleting a file that is still referenced is a database error rather than a broken image.
 
-`purpose` (`AVATAR`, `SCHOOL_LOGO`, `LESSON_ATTACHMENT`, `STUDENT_ATTACHMENT`, `OTHER`)
-drives size limits and retention, and stops a lesson attachment being served as somebody's
-avatar.
+`purpose` (`AVATAR`, `SCHOOL_LOGO`, `LESSON_ATTACHMENT`, `STUDENT_ATTACHMENT`,
+`TUTOR_LIBRARY`, `OTHER`) drives size limits and retention, and stops a lesson attachment
+being served as somebody's avatar.
+
+**What a file can hang off, and why each one.** A student, for documents about that person —
+a contract, a report. A lesson, for material about that hour — the worksheet handed out, the
+slides. A tutor, for their own shelf of things they reuse. The lesson case is against the
+lesson rather than each student who attended, because a group lesson hands the same sheet to
+everybody: a copy per student would store five files where a person sees one, and correcting
+the sheet would mean correcting it five times.
+
+**Who may see a file is never decided here.** It is decided by whatever the file hangs off:
+`StudentsService.findOne` for a student's documents, `LessonsService.findReachable` for a
+lesson's material. Borrowed rather than restated, so there is one rule per thing and not a
+second one in the files module that can drift out of step with it. A personal library is the
+exception and belongs to its uploader, which is a rule about the shelf rather than about the
+file.
 
 Files go through `StorageService`, a seam like `MailService`: the local disk is what a single
 server needs, and object storage is a different implementation of four methods rather than a
@@ -417,6 +431,10 @@ The row is written **before** the bytes and finalised after, which is what `uplo
 for. If writing the bytes fails, what remains is a row with no `uploadedAt` — a record that
 something was attempted, which can be found and cleared. The other order leaves bytes on
 disk that nothing in the database knows about, and nothing can find those.
+
+Types are an allow-list, and the bytes are checked against the type they claim to be — the
+`Content-Type` on a multipart part is written by the client, so the list alone stops an
+honest upload and nothing else. See `files/file-signatures.ts`.
 
 Types are an allow-list. The set of dangerous types grows over time and the set of useful
 ones does not, so guessing wrong on an allow-list costs somebody an upload while guessing
