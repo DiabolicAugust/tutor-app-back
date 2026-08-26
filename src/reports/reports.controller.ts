@@ -3,7 +3,8 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import type { User } from '../../generated/prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { ReportQueryDto } from './dto/report-query.dto';
+import { DebtorsService } from './debtors.service';
+import { DebtorQueryDto, ReportQueryDto } from './dto/report-query.dto';
 import { ReportsService } from './reports.service';
 
 /**
@@ -16,10 +17,24 @@ import { ReportsService } from './reports.service';
 @Controller('reports')
 @UseGuards(JwtAuthGuard)
 export class ReportsController {
-  constructor(private readonly reports: ReportsService) {}
+  constructor(
+    private readonly reports: ReportsService,
+    private readonly owing: DebtorsService,
+  ) {}
 
   @Get('summary')
   summary(@CurrentUser() user: User, @Query() query: ReportQueryDto) {
     return this.reports.summary(user, query);
+  }
+
+  /**
+   * Who has run out of paid lessons.
+   *
+   * No window: this is a state rather than a period. A tutor sees their own
+   * students and an admin the school, which is the same rule as the summary.
+   */
+  @Get('debtors')
+  debtors(@CurrentUser() user: User, @Query() query: DebtorQueryDto) {
+    return this.owing.list(user, query);
   }
 }
