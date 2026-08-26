@@ -14,7 +14,10 @@ import {
   LessonStatus,
   UserRole,
 } from '../../generated/prisma/enums';
-import { AuthService } from '../../src/auth/auth.service';
+import {
+  CredentialsService,
+  SessionsService,
+} from '@diabolicaugust/session-kit/nest';
 import type { TestApp } from './test-app';
 
 /** The password every factory-made account has, for the sign-in tests. */
@@ -28,8 +31,12 @@ export const TEST_PASSWORD = 'correct-horse-battery';
  * whose behaviour one test needs and the rest merely depend on.
  */
 let cachedHash: string | undefined;
-async function passwordHash(): Promise<string> {
-  cachedHash ??= await AuthService.hashPassword(TEST_PASSWORD);
+async function passwordHash(test: TestApp): Promise<string> {
+  // Hashed through the application's own service rather than by calling bcrypt
+  // here, so the cost factor and the algorithm are whatever the running
+  // configuration says. A factory that hashed its own way would keep passing
+  // after a change that broke sign-in.
+  cachedHash ??= await test.app.get(CredentialsService).hash(TEST_PASSWORD);
   return cachedHash;
 }
 
@@ -75,7 +82,7 @@ export async function makeUser(
       email,
       name: options.name ?? email.split('@')[0],
       role: options.role ?? UserRole.TUTOR,
-      passwordHash: await passwordHash(),
+      passwordHash: await passwordHash(test),
       schoolId: options.school.id,
       ...(options.config ? { config: options.config } : {}),
     },
@@ -346,7 +353,7 @@ export function makeGrade(
  * Sign-in itself is covered on its own.
  */
 export async function tokenFor(test: TestApp, user: User): Promise<string> {
-  const { token } = await test.app.get(AuthService).issueSession(user);
+  const { token } = await test.app.get(SessionsService).issue(user);
   return token;
 }
 

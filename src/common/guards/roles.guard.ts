@@ -1,39 +1,11 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  ForbiddenException,
-  Injectable,
-} from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
-
-import type { User } from '../../../generated/prisma/client';
-import type { UserRole } from '../../../generated/prisma/enums';
-import { ROLES_KEY } from '../decorators/roles.decorator';
-
 /**
- * Enforces `@Roles(...)`. Must run after the JWT guard, which is what puts the
- * user on the request — listing it second in `@UseGuards` does that.
+ * Enforces `@Roles(...)`, from `session-kit`.
  *
- * A route with no `@Roles` is open to any authenticated user; the JWT guard has
- * already done the authentication half.
+ * Re-exported rather than reimplemented. The rule is small — read the role the
+ * JWT guard put on the request, compare it against the decorator — and it was
+ * identical in every project that had it.
+ *
+ * Must still run *after* `JwtAuthGuard`, which is what puts the user there;
+ * listing it second in `@UseGuards` does that.
  */
-@Injectable()
-export class RolesGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
-
-  canActivate(context: ExecutionContext): boolean {
-    const required = this.reflector.getAllAndOverride<UserRole[] | undefined>(
-      ROLES_KEY,
-      [context.getHandler(), context.getClass()],
-    );
-
-    if (!required?.length) return true;
-
-    const { user } = context.switchToHttp().getRequest<{ user?: User }>();
-    if (!user || !required.includes(user.role)) {
-      throw new ForbiddenException('Your role does not allow this');
-    }
-
-    return true;
-  }
-}
+export { RolesGuard } from '@diabolicaugust/session-kit/nest';

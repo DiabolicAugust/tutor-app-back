@@ -1,17 +1,7 @@
-import { SetMetadata } from '@nestjs/common';
-
-import type { UserRole } from '../../../generated/prisma/enums';
-
-export const ROLES_KEY = 'roles';
-
 /**
- * Restricts a route to the listed roles.
+ * Restricts a route to certain roles, from `session-kit`.
  *
- * Declarative on purpose: `if (user.role !== 'ADMIN') throw` scattered through
- * services makes the permission model something you have to read the whole
- * codebase to know. Here it is visible on the handler.
- *
- * Data *scoping* is a different question and stays in the services — an admin
- * and a tutor may both call an endpoint and legitimately see different rows.
+ * Generic over whatever an application calls its roles, so passing a `UserRole`
+ * keeps the same protection against a typo that a local definition gave.
  */
-export const Roles = (...roles: UserRole[]) => SetMetadata(ROLES_KEY, roles);
+export { Roles, ROLES_KEY } from '@diabolicaugust/session-kit/nest';

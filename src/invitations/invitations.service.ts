@@ -10,7 +10,12 @@ import { ConfigService } from '@nestjs/config';
 
 import type { User } from '../../generated/prisma/client';
 import { UserRole } from '../../generated/prisma/enums';
-import { AuthService } from '../auth/auth.service';
+import {
+  CredentialsService,
+  SessionsService,
+} from '@diabolicaugust/session-kit/nest';
+
+import type { AuthUserPayload } from '../auth/auth.types';
 import type { Env } from '../config/env';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -24,7 +29,8 @@ export class InvitationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
-    private readonly auth: AuthService,
+    private readonly sessions: SessionsService<User, AuthUserPayload>,
+    private readonly credentials: CredentialsService,
     private readonly config: ConfigService<Env, true>,
   ) {}
 
@@ -116,7 +122,7 @@ export class InvitationsService {
    */
   async accept(token: string, dto: AcceptInvitationDto) {
     const invitation = await this.findUsable(token);
-    const passwordHash = await AuthService.hashPassword(dto.password);
+    const passwordHash = await this.credentials.hash(dto.password);
 
     const user = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.invitation.updateMany({
@@ -139,7 +145,7 @@ export class InvitationsService {
       });
     });
 
-    return await this.auth.issueSession(user);
+    return await this.sessions.issue(user);
   }
 
   private async findUsable(token: string) {

@@ -7,7 +7,12 @@ import {
 import type { User } from '../../generated/prisma/client';
 import { UserRole } from '../../generated/prisma/enums';
 import { AddonsService } from '../addons/addons.service';
-import { AuthService } from '../auth/auth.service';
+import {
+  CredentialsService,
+  SessionsService,
+} from '@diabolicaugust/session-kit/nest';
+
+import type { AuthUserPayload } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateTutorDto } from './dto/create-tutor.dto';
 import type { RegisterSchoolDto } from './dto/register-school.dto';
@@ -26,7 +31,8 @@ const TUTOR_FIELDS = {
 export class SchoolsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly auth: AuthService,
+    private readonly sessions: SessionsService<User, AuthUserPayload>,
+    private readonly credentials: CredentialsService,
     private readonly addons: AddonsService,
   ) {}
 
@@ -50,7 +56,7 @@ export class SchoolsService {
     if (existingSlug)
       throw new ConflictException('That school address is taken');
 
-    const passwordHash = await AuthService.hashPassword(dto.adminPassword);
+    const passwordHash = await this.credentials.hash(dto.adminPassword);
 
     const admin = await this.prisma.$transaction(async (tx) => {
       const school = await tx.school.create({
@@ -74,7 +80,7 @@ export class SchoolsService {
 
     // Signed in immediately: onboarding that ends on a login form is a worse
     // first minute for no gain.
-    return await this.auth.issueSession(admin);
+    return await this.sessions.issue(admin);
   }
 
   async findCurrent(user: User) {
@@ -136,7 +142,7 @@ export class SchoolsService {
         email,
         name: dto.name.trim(),
         role: UserRole.TUTOR,
-        passwordHash: await AuthService.hashPassword(dto.password),
+        passwordHash: await this.credentials.hash(dto.password),
         schoolId: user.schoolId,
       },
       select: TUTOR_FIELDS,

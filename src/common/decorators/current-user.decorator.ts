@@ -1,15 +1,7 @@
-import { createParamDecorator, type ExecutionContext } from '@nestjs/common';
-
-import type { User } from '../../../generated/prisma/client';
-
 /**
- * The authenticated user, as resolved by `JwtStrategy`.
+ * The authenticated user, from `session-kit`.
  *
- * Controllers take this instead of reading `request.user`, which keeps the
- * `any` that Express hands back out of feature code.
+ * Typed by the caller — `@CurrentUser() user: User` — because the library never
+ * knew what a user was here and should not start pretending at the last moment.
  */
-export const CurrentUser = createParamDecorator(
-  (_data: unknown, context: ExecutionContext): User => {
-    return context.switchToHttp().getRequest<{ user: User }>().user;
-  },
-);
+export { CurrentUser } from '@diabolicaugust/session-kit/nest';
