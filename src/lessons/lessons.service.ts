@@ -5,9 +5,13 @@ import {
 } from '@nestjs/common';
 
 import type { User } from '../../generated/prisma/client';
+import type { MeetingProvider } from '../../generated/prisma/enums';
+import { MeetingAccountsService } from '../meetings/meeting-accounts.service';
+import { meetingLinkFor } from '../meetings/meeting-providers';
 import { PrismaService } from '../prisma/prisma.service';
 import { StudentsService } from '../students/students.service';
 import { SubjectsService } from '../subjects/subjects.service';
+import { parseUserConfig } from '../users/user-config';
 import type {
   CreateLessonDto,
   ListLessonsQueryDto,
@@ -79,6 +83,7 @@ export class LessonsService {
     private readonly prisma: PrismaService,
     private readonly students: StudentsService,
     private readonly subjects: SubjectsService,
+    private readonly meetings: MeetingAccountsService,
   ) {}
 
   /**
@@ -184,12 +189,25 @@ export class LessonsService {
       );
     }
 
+    const subjectId = await this.subjects.resolve(user, dto.subjectId ?? null);
+    const startsAt = new Date(dto.startsAt);
+
+    // Read from the tutor's settings at booking time and then stored, which is
+    // what makes the link stable: see the note on `Lesson.meetingUrl`.
+    const meeting = await this.meetingFor(user, {
+      subjectId,
+      startsAt,
+      durationMinutes: dto.durationMinutes,
+    });
+
     const common = {
-      subjectId: await this.subjects.resolve(user, dto.subjectId ?? null),
-      startsAt: new Date(dto.startsAt),
+      subjectId,
+      startsAt,
       durationMinutes: dto.durationMinutes,
       schoolId: user.schoolId,
       tutorId: user.id,
+      meetingUrl: meeting?.url ?? null,
+      meetingProvider: meeting?.provider ?? null,
     };
 
     if (dto.groupId !== undefined) {
@@ -205,6 +223,66 @@ export class LessonsService {
       data: { ...common, studentId: student.id },
       include: WITH_ATTENDEES,
     });
+  }
+
+  /**
+   * The room a lesson being booked gets, if any.
+   *
+   * Two ways to arrive at one, tried in this order:
+   *
+   * 1. **A connected account.** Zoom and Google will create a room per lesson
+   *    once the tutor has authorised it, which is the version of this feature
+   *    people actually want: a separate room per hour, with its own link.
+   * 2. **The room they already own**, from their settings. What Zoom and Google
+   *    can offer before they have connected anything, and all Jitsi ever needs.
+   *
+   * A failure at step 1 falls through to step 2 rather than failing the booking.
+   * That is deliberate: a lesson is a commitment between two people and must not
+   * fail to exist because a third party had a bad minute. The failure is logged,
+   * and a revoked connection is dropped so the settings screen stops claiming
+   * otherwise.
+   */
+  private async meetingFor(
+    user: User,
+    lesson: {
+      subjectId: string | null;
+      startsAt: Date;
+      durationMinutes: number;
+    },
+  ): Promise<{ provider: MeetingProvider; url: string } | null> {
+    const settings = parseUserConfig(user.config).meeting;
+    if (settings === null) return null;
+
+    const created = await this.meetings.createRoom(user, settings.provider, {
+      topic: await this.topicFor(user, lesson.subjectId),
+      startsAt: lesson.startsAt,
+      durationMinutes: lesson.durationMinutes,
+    });
+
+    return created === null
+      ? meetingLinkFor(settings)
+      : { provider: settings.provider, url: created };
+  }
+
+  /**
+   * What the meeting is called on the provider's side.
+   *
+   * The subject, because that is what a person recognises in a list of Zoom
+   * meetings. Deliberately not the student's name: these titles are visible in
+   * an account outside the school, and a child's name does not need to be there.
+   */
+  private async topicFor(
+    user: User,
+    subjectId: string | null,
+  ): Promise<string> {
+    if (subjectId === null) return 'Lesson';
+
+    const subject = await this.prisma.subject.findFirst({
+      where: { id: subjectId, schoolId: user.schoolId },
+      select: { name: true },
+    });
+
+    return subject?.name ?? 'Lesson';
   }
 
   /**

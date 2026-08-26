@@ -1,6 +1,12 @@
 import request from 'supertest';
 
-import { LessonStatus, UserRole } from '../generated/prisma/enums';
+import type { User } from '../generated/prisma/client';
+
+import {
+  LessonStatus,
+  MeetingProvider,
+  UserRole,
+} from '../generated/prisma/enums';
 import {
   authHeader,
   makeGroup,
@@ -773,6 +779,127 @@ describe('Lessons', () => {
         .query({ tutorIds: many })
         .set(await authHeader(test, tutor))
         .expect(400);
+    });
+  });
+
+  describe('the link to join', () => {
+    /** Puts a tutor on a provider, the way the settings screen would. */
+    const teachesOn = (
+      test: TestApp,
+      tutor: { id: string },
+      meeting: { provider: MeetingProvider; roomUrl: string | null } | null,
+    ) =>
+      test.prisma.user.update({
+        where: { id: tutor.id },
+        data: { config: { meeting } },
+      });
+
+    const book = async (tutor: User, student: { id: string }) =>
+      (
+        await request(test.server)
+          .post('/api/lessons')
+          .set(await authHeader(test, tutor))
+          .send({
+            studentId: student.id,
+            startsAt: at(1).toISOString(),
+            durationMinutes: 60,
+          })
+          .expect(201)
+      ).body;
+
+    it('is absent for a tutor who teaches in a room', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+
+      const lesson = await book(tutor, student);
+
+      // Null rather than an empty string: nothing to join is not a blank link.
+      expect(lesson.meetingUrl).toBeNull();
+      expect(lesson.meetingProvider).toBeNull();
+    });
+
+    it('is a fresh room for every lesson, on a provider that makes them', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      await teachesOn(test, tutor, {
+        provider: MeetingProvider.JITSI,
+        roomUrl: null,
+      });
+
+      const first = await book(tutor, student);
+      const second = await book(tutor, student);
+
+      expect(first.meetingProvider).toBe(MeetingProvider.JITSI);
+      expect(first.meetingUrl).toContain('https://meet.jit.si/');
+      // Two lessons sharing a room would drop one class into another's call.
+      expect(first.meetingUrl).not.toBe(second.meetingUrl);
+    });
+
+    it("is the tutor's own room, on a provider that reuses one", async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      await teachesOn(test, tutor, {
+        provider: MeetingProvider.ZOOM,
+        roomUrl: 'https://myschool.zoom.us/j/9876543210',
+      });
+
+      const lesson = await book(tutor, student);
+
+      expect(lesson).toMatchObject({
+        meetingProvider: MeetingProvider.ZOOM,
+        meetingUrl: 'https://myschool.zoom.us/j/9876543210',
+      });
+    });
+
+    it('does not change under a lesson that is already booked', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      await teachesOn(test, tutor, {
+        provider: MeetingProvider.ZOOM,
+        roomUrl: 'https://zoom.us/j/111',
+      });
+
+      const booked = await book(tutor, student);
+      // The tutor moves providers in March. February's lessons must not start
+      // claiming to be somewhere they were never held, and a link already sent
+      // to a student has to keep meaning what it meant.
+      await teachesOn(test, tutor, {
+        provider: MeetingProvider.JITSI,
+        roomUrl: null,
+      });
+
+      const { body } = await request(test.server)
+        .get('/api/lessons')
+        .query({ from: at(0).toISOString(), to: at(2).toISOString() })
+        .set(await authHeader(test, tutor))
+        .expect(200);
+
+      expect(
+        body.find((l: { id: string }) => l.id === booked.id),
+      ).toMatchObject({
+        meetingProvider: MeetingProvider.ZOOM,
+        meetingUrl: 'https://zoom.us/j/111',
+      });
+    });
+
+    it('is not created from settings an older build stored', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+      // http, which this build refuses. Better no link than one that fails in
+      // front of a student.
+      await teachesOn(test, tutor, {
+        provider: MeetingProvider.ZOOM,
+        roomUrl: 'http://zoom.us/j/1',
+      });
+
+      const lesson = await book(tutor, student);
+
+      expect(lesson.meetingUrl).toBeNull();
     });
   });
 });

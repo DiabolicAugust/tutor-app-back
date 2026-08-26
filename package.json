@@ -27,6 +27,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "meetings:preflight": "tsx scripts/meetings-preflight.ts",
     "typecheck": "tsc --noEmit",
     "test:all": "npm run test && npm run test:e2e",
     "db:test:up": "docker run --name fox-test-db -e POSTGRES_PASSWORD=fox -e POSTGRES_DB=foxacademy_test -p 55432:5432 -d postgres:17",

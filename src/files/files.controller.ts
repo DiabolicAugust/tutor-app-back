@@ -90,7 +90,10 @@ export class FilesController {
    * decides who may see it — the lesson's own reachability rule and no second one.
    */
   @Get('lessons/:lessonId/files')
-  listForLesson(@CurrentUser() user: User, @Param('lessonId') lessonId: string) {
+  listForLesson(
+    @CurrentUser() user: User,
+    @Param('lessonId') lessonId: string,
+  ) {
     return this.files.listForLesson(user, lessonId);
   }
 

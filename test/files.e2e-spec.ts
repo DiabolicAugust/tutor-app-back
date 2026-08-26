@@ -645,7 +645,7 @@ describe('Student files', () => {
       expect(documents.body).toHaveLength(0);
     });
 
-    it("is hidden from a colleague, like the lesson itself", async () => {
+    it('is hidden from a colleague, like the lesson itself', async () => {
       const { school, lesson, tutor } = await seedLesson();
       const colleague = await makeUser(test, { school });
 
@@ -687,7 +687,7 @@ describe('Student files', () => {
       expect(listed.body).toHaveLength(1);
     });
 
-    it("cannot be reached from another school", async () => {
+    it('cannot be reached from another school', async () => {
       const { lesson } = await seedLesson();
       const other = await makeSchool(test);
       const stranger = await makeUser(test, { school: other });

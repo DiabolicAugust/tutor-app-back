@@ -41,6 +41,51 @@ const envSchema = z.object({
   /** Where support requests are forwarded once a mail provider exists. */
   SUPPORT_EMAIL: z.string().email().default('support@foxacademy.dev'),
   /**
+   * This API's own public base URL, used to build the OAuth redirect.
+   *
+   * It has to match what is registered with Zoom and Google **exactly**, which
+   * is why it is configured rather than derived from the incoming request: a
+   * redirect built from a `Host` header is both spoofable and, behind a proxy,
+   * usually wrong.
+   *
+   * Optional, because everything except connecting a meeting account works
+   * without it.
+   */
+  PUBLIC_API_URL: z.string().url().optional(),
+  /**
+   * Where the browser is sent once a provider has been connected.
+   *
+   * The app's own scheme, so the tab closes back into Settings rather than
+   * leaving somebody looking at a blank page wondering whether it worked.
+   */
+  MEETING_CONNECTED_URL: z.string().default('foxacademy://settings'),
+  /**
+   * The key that encrypts stored refresh tokens — see `token-cipher.ts`.
+   *
+   * **Changing it makes every existing connection unreadable**, which is
+   * survivable (tutors reconnect) but not silent, so it should be generated once
+   * and kept. Long, because it is stretched to a key rather than used directly
+   * and its entropy is the only thing protecting a set of credentials to other
+   * people's accounts.
+   */
+  MEETING_TOKEN_SECRET: z
+    .string()
+    .min(32, 'MEETING_TOKEN_SECRET must be at least 32 characters')
+    .optional(),
+  /**
+   * Credentials for the OAuth apps.
+   *
+   * Optional individually: a deployment with only Zoom registered offers Zoom
+   * and says the other is unavailable, rather than refusing to boot. What is not
+   * optional is the pair — an id without a secret is a misconfiguration that
+   * would surface as a failed exchange much later, so the check below refuses
+   * it at startup.
+   */
+  ZOOM_CLIENT_ID: z.string().optional(),
+  ZOOM_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  /**
    * Where uploaded files are kept.
    *
    * `local` is a directory, which is what a single server needs and what the
@@ -145,6 +190,12 @@ export type Env = Omit<z.infer<typeof envSchema>, 'CORS_ORIGINS'> & {
  * **Development opens**, because the web build is served from a different port
  * and there is nothing to protect on a laptop.
  */
+/** OAuth apps, as the pairs they have to be configured in. */
+const MEETING_OAUTH_PAIRS = [
+  ['ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET'],
+  ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+] as const;
+
 function corsOriginsFor(
   configured: string | undefined,
   nodeEnv: Env['NODE_ENV'],
@@ -197,6 +248,46 @@ export function validateEnv(raw: Record<string, unknown>): Env {
           'Invalid environment configuration:',
           ...missing.map(
             (key) => `  - ${key}: required when STORAGE_DRIVER=s3`,
+          ),
+        ].join('\n'),
+      );
+    }
+  }
+
+  // A half-configured OAuth app fails at the exchange, long after boot and in
+  // front of a tutor. Checked as pairs here, where the fix is obvious.
+  const halfPairs = MEETING_OAUTH_PAIRS.filter(
+    ([id, secret]) => Boolean(result.data[id]) !== Boolean(result.data[secret]),
+  );
+  if (halfPairs.length > 0) {
+    throw new Error(
+      [
+        'Invalid environment configuration:',
+        ...halfPairs.map(
+          ([id, secret]) => `  - ${id} and ${secret}: set both, or neither`,
+        ),
+      ].join('\n'),
+    );
+  }
+
+  // Credentials with nowhere to send the browser back to, or nowhere safe to
+  // keep what comes back. Both are needed before any provider can be connected,
+  // and both are cheap to get right at boot.
+  const configuredProviders = MEETING_OAUTH_PAIRS.some(
+    ([id]) => result.data[id],
+  );
+  if (configuredProviders) {
+    const missing = (
+      ['PUBLIC_API_URL', 'MEETING_TOKEN_SECRET'] as const
+    ).filter((key) => !result.data[key]);
+
+    if (missing.length > 0) {
+      throw new Error(
+        [
+          'Invalid environment configuration:',
+          ...missing.map(
+            (key) =>
+              `  - ${key}: required once a meeting provider is configured`,
           ),
         ].join('\n'),
       );

@@ -1,8 +1,10 @@
+import { MeetingProvider } from '../../generated/prisma/enums';
 import {
   defaultUserConfig,
   mergeUserConfig,
   parseUserConfig,
   REMINDER_PRESETS_MINUTES,
+  userConfigPatchSchema,
 } from './user-config';
 
 describe('parseUserConfig', () => {
@@ -23,6 +25,7 @@ describe('parseUserConfig', () => {
       lessonReminders: true,
       lessonReminderMinutes: 15,
       gradesEnabled: true,
+      meeting: null,
     });
   });
 
@@ -110,10 +113,72 @@ describe('mergeUserConfig', () => {
       lessonReminders: true,
       lessonReminderMinutes: 60,
       gradesEnabled: false,
+      meeting: null,
     });
   });
 
   it('returns a complete config even from an empty patch', () => {
     expect(mergeUserConfig(undefined, {})).toEqual(defaultUserConfig);
+  });
+});
+
+describe('where a tutor teaches online', () => {
+  const zoom = {
+    provider: MeetingProvider.ZOOM,
+    roomUrl: 'https://zoom.us/j/123',
+  };
+
+  it('is nobody by default, because teaching in a room is still the norm', () => {
+    expect(defaultUserConfig.meeting).toBeNull();
+  });
+
+  it('is kept once it is set', () => {
+    expect(parseUserConfig({ meeting: zoom }).meeting).toEqual(zoom);
+  });
+
+  it('is dropped on read, without taking the rest of the config with it', () => {
+    // A column an older build wrote, or one this build no longer accepts. The
+    // meeting goes; reminders and grading must not, or a person loses settings
+    // they never touched.
+    const config = parseUserConfig({
+      gradesEnabled: false,
+      lessonReminders: true,
+      meeting: { provider: 'ZOOM', roomUrl: 'http://zoom.us/j/1' },
+    });
+
+    expect(config.meeting).toBeNull();
+    expect(config.gradesEnabled).toBe(false);
+    expect(config.lessonReminders).toBe(true);
+  });
+
+  it('is refused on write rather than quietly emptied', () => {
+    // The opposite rule to the read above, and deliberately so: somebody typing
+    // an address has to be told it is wrong, or the screen looks like it saved.
+    const result = userConfigPatchSchema.safeParse({
+      meeting: { provider: 'ZOOM', roomUrl: 'https://meet.google.com/a-b-c' },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('is cleared by an explicit null, and left alone by an absent field', () => {
+    expect(
+      mergeUserConfig({ meeting: zoom }, { meeting: null }).meeting,
+    ).toBeNull();
+    expect(
+      mergeUserConfig({ meeting: zoom }, { gradesEnabled: false }).meeting,
+    ).toEqual(zoom);
+  });
+});
+
+describe('userConfigPatchSchema', () => {
+  it('invents nothing the client did not send', () => {
+    // The regression this pins: give the patch fields their own defaults and a
+    // request that changes the reminder time also switches reminders off, by
+    // filling in a field it never mentioned. The read schema is where defaults
+    // belong; a patch has no business having an opinion.
+    const parsed = userConfigPatchSchema.parse({ lessonReminderMinutes: 120 });
+
+    expect(Object.keys(parsed)).toEqual(['lessonReminderMinutes']);
   });
 });

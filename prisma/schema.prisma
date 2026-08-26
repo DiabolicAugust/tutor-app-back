@@ -125,9 +125,58 @@ model User {
   notesWritten    Note[]           @relation("NoteAuthor")
   gradesGiven     Grade[]          @relation("GradeAuthor")
   devices         PushToken[]      @relation("UserDevices")
+  /// Meeting providers this tutor has connected — see `MeetingAccount`.
+  meetingAccounts MeetingAccount[] @relation("UserMeetingAccounts")
 
   @@index([schoolId])
   @@map("users")
+}
+
+/// A tutor's connection to a meeting provider, and the right to create rooms as
+/// them.
+///
+/// Its own table rather than a field on `User.config`, for one reason that
+/// settles it: this holds a credential. The config column is read on every
+/// request and returned to the app in full, and a refresh token has no business
+/// travelling on either path. Nothing here is ever sent to a client.
+///
+/// One row per tutor per provider. Somebody who teaches on both Zoom and Meet
+/// has two, and the one that gets used is whichever their settings name.
+model MeetingAccount {
+  id       String          @id @default(cuid())
+  provider MeetingProvider
+
+  userId String
+  user   User   @relation("UserMeetingAccounts", fields: [userId], references: [id], onDelete: Cascade)
+
+  /// The long-lived credential, encrypted at rest — see `token-cipher.ts`.
+  ///
+  /// Encrypted rather than stored plainly because a database dump would
+  /// otherwise be a set of working keys to other people's Zoom and Google
+  /// accounts, which is a far worse loss than the contents of this schema.
+  ///
+  /// **Zoom rotates this on every refresh** and invalidates the previous one, so
+  /// a refresh that is not written back leaves the connection dead the next time
+  /// it is used. Google does not rotate. The refresh path handles both by always
+  /// writing back whatever came out.
+  refreshToken String
+
+  /// The short-lived one, cached so booking a lesson does not need a round trip
+  /// to the provider first. Null until the first refresh.
+  accessToken          String?
+  accessTokenExpiresAt DateTime?
+
+  /// Who they connected as, shown in settings so somebody can tell which of
+  /// their accounts this is. Null when the provider did not say.
+  accountLabel String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Connecting the same provider twice replaces the connection rather than
+  /// accumulating dead credentials.
+  @@unique([userId, provider])
+  @@map("meeting_accounts")
 }
 
 /// Something a school teaches.
@@ -218,6 +267,21 @@ enum LessonStatus {
   CANCELLED
 }
 
+/// Where a lesson is held online.
+///
+/// An enum rather than a string because every part of the system has to agree on
+/// the list: the app draws a picker from it, the config accepts one of it, and
+/// the link builder keys off it. A provider added here fails to compile
+/// everywhere it has not been handled yet, which is the point.
+enum MeetingProvider {
+  ZOOM
+  GOOGLE_MEET
+  /// The one that needs no account: a Jitsi room exists as soon as somebody
+  /// opens its URL, so this is the only provider whose link can genuinely be
+  /// created per lesson without the tutor consenting to anything first.
+  JITSI
+}
+
 /// Whether the student turned up — and if not, whose fault it was.
 ///
 /// The excused/unexcused split is not bookkeeping pedantry: it is the whole
@@ -303,6 +367,18 @@ model Lesson {
   /// What was set for next time. Whether each student *did* it is per-student —
   /// see `LessonAttendance.homeworkDone`.
   homework String?
+
+  /// Where to join, if the tutor teaches online.
+  ///
+  /// Written when the lesson is booked and never rewritten afterwards, which is
+  /// why the provider is stored beside the link rather than read back from the
+  /// tutor's settings: somebody who moves from Zoom to Meet in March must not
+  /// find February's lessons claiming to be on Meet, and the link in a message
+  /// already sent has to keep meaning what it meant.
+  ///
+  /// Null for a lesson taught in a room, which stays the default.
+  meetingUrl      String?
+  meetingProvider MeetingProvider?
 
   notes       Note[]
   grades      Grade[]

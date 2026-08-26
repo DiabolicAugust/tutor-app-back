@@ -23,6 +23,8 @@ import { PushModule } from './push/push.module';
 import { SchoolsModule } from './schools/schools.module';
 import { SubjectsModule } from './subjects/subjects.module';
 import { StudentsModule } from './students/students.module';
+import { MeetingsModule } from './meetings/meetings.module';
+import { ReportsModule } from './reports/reports.module';
 import { SupportModule } from './support/support.module';
 import { UsersModule } from './users/users.module';
 
@@ -78,6 +80,8 @@ import { UsersModule } from './users/users.module';
     GradebookModule,
     FilesModule,
     PushModule,
+    MeetingsModule,
+    ReportsModule,
     SupportModule,
   ],
   controllers: [HealthController],

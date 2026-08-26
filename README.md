@@ -443,6 +443,121 @@ the same reason: these are files from outside the team, and rendering one in the
 own origin is how a stored file becomes a script that runs.
 
 
+## Online lessons
+
+A tutor picks a service in their settings, and every lesson booked from then on is created
+with a link on it. Both the link and the provider that produced it are stored on the
+lesson and never rewritten — somebody who moves from Zoom to Meet in March must not find
+February's lessons claiming to be on Meet, and a link already sent to a student has to keep
+meaning what it meant.
+
+`MeetingProvider` is a real enum, and `MEETING_PROVIDERS` in `src/meetings` is a `Record`
+keyed by it, so a provider added to the schema and forgotten in the link builder fails to
+compile rather than quietly booking lessons with no link.
+
+The providers differ in a way that matters more than their names:
+
+| Provider | Link | Needs |
+| --- | --- | --- |
+| `JITSI` | a fresh room per lesson | nothing |
+| `ZOOM` | a fresh room per lesson | the tutor to connect their account |
+| `GOOGLE_MEET` | a fresh room per lesson | the tutor to connect their account |
+| `ZOOM` / `GOOGLE_MEET`, unconnected | the tutor's own room, every time | an address they paste in |
+
+The last row is the fallback, and it is also what happens when a provider is unreachable at
+the moment a lesson is booked. A booking never fails because a third party had a bad minute:
+a lesson is a commitment between two people, and it is recorded with whatever link can be
+had — or none.
+
+### Connecting an account
+
+Zoom and Google will not create a meeting for somebody who has not authorised it: Google's
+`spaces.create` needs the `meetings.space.created` scope held by the account the room will
+belong to, and Zoom the equivalent. So a tutor connects once, in Settings, and the server
+keeps a refresh token — after which each lesson gets a room of its own. Choosing either
+provider in the app starts that immediately, because picking a provider and authorising it
+are one intention.
+
+The exchange happens **on the server**. A client secret has no business in an app bundle,
+and the browser that returns from the consent screen carries no token of ours, so who is
+connecting travels in a short-lived signed `state` rather than in a table of pending
+connections. That state carries a `use` claim, without which an ordinary access token would
+be accepted at a callback that is reachable unauthenticated.
+
+Credentials are encrypted at rest (`token-cipher.ts`, AES-256-GCM). A database dump of plain
+refresh tokens would be a set of working keys to other people's Zoom and Google accounts —
+a worse loss than everything else in this schema together. **Zoom rotates the refresh token
+on every refresh and invalidates the previous one**, so whatever comes back is written
+straight away; Google does not rotate and returns nothing, so the stored one is kept. A
+refresh the provider rejects deletes the connection, because a token that has been revoked
+will never work again and leaving the row means the app keeps saying "connected" while every
+lesson silently gets no link.
+
+None of it is required to run. With nothing configured, tutors get Jitsi and the
+paste-your-own-room path, and the API says the providers are unavailable rather than opening
+a browser onto an error page. The pairs are checked at boot: an id without a secret, or
+either without `PUBLIC_API_URL` and `MEETING_TOKEN_SECRET`, stops the process instead of
+failing at an exchange weeks later.
+
+### Proving it works
+
+`test/meetings.e2e-spec.ts` drives both providers through a stand-in that speaks their
+protocol (`test/support/fake-provider.ts`). That covers everything on this side of their
+servers: the grant types, Zoom's Basic header against Google's body credentials, the
+redirect, token rotation written back, a revoked token dropping the connection, a cached
+token not being refreshed needlessly, a provider having a bad minute not stopping a lesson
+from being booked, and a student's name never reaching a meeting title in an account outside
+the school.
+
+What it cannot prove is that the real providers agree — that the app was registered with
+the scope we ask for, that the redirect matches to the character, that the account may
+create meetings at all. Every one of those fails in the same place, in front of a tutor. So
+after connecting once in the app:
+
+```
+npm run meetings:preflight -- tutor@example.com ZOOM
+```
+
+which refreshes for real, creates a real room, and prints what the provider said.
+
+Jitsi rooms are named from twelve random bytes. That is the only thing keeping a stranger
+out: the room exists the moment somebody opens its URL and admits anybody holding it, so a
+guessable name (`foxacademy-lesson-12`) would be an open door into a lesson with children
+in it.
+
+An address is checked against the provider it was filed under — https only, no credentials
+in the URL, and the host matched exactly or as a parent domain, never as a string suffix,
+because `evilzoom.us` ends with `zoom.us` and belongs to somebody else. The rule lives in
+`meetingRoomProblem` and returns the reason rather than a boolean, because every caller
+needs the reason. Reads repair themselves quietly and writes are refused out loud: a column
+an older build wrote must not cost somebody their reminder settings, and a request carrying
+an unusable address must not look like it saved.
+
+## Reports
+
+`GET /reports/summary?from=&to=&tutorId=` answers what was taught over a period: lessons by
+status, minutes actually taught, distinct students, attendance, marks, and a breakdown by
+subject and by tutor.
+
+Nothing is stored. Every figure is computed from the same rows the calendar and the
+gradebook read, and the attendance rate and the weighted average come from
+`gradebook/progress.ts` — the functions a student's own progress page uses. That is the
+point: two screens that count attendance differently will eventually show two numbers to
+the same person about the same weeks.
+
+A tutor is scoped to their own work and gets no per-tutor table; asking about a colleague
+is refused rather than quietly answered with their own numbers. An admin sees the school
+and may narrow to one tutor. The window is bounded at 400 days for the same reason the
+calendar's is: without it an ordinary account can ask for 1970 to 2100 and make the
+database read every lesson the school has ever taught.
+
+Minutes are counted from **completed** lessons only. Scheduled ones are a plan and
+cancelled ones did not happen, so counting either would ruin the number for the thing it is
+for. Students are counted per person rather than per lesson, and a group lesson counts
+everybody in the room — using current membership, which is the one inaccuracy here:
+somebody who left a group last week is not counted for the lessons they sat in. Recording
+membership per lesson is the fix, and it is a schema change rather than a query change.
+
 ## Seed data
 
 `prisma/seed.ts` creates the same cast as the app's fixtures — same names, same balances,

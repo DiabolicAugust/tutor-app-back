@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import { MeetingProvider } from '../../generated/prisma/enums';
+import { meetingRoomProblem } from '../meetings/meeting-providers';
+
 /**
  * Per-user preferences, stored in the `users.config` JSON column.
  *
@@ -12,14 +15,46 @@ import { z } from 'zod';
 /** Offered as presets in the app; an arbitrary value in range is still valid. */
 export const REMINDER_PRESETS_MINUTES = [15, 30, 60, 120] as const;
 
-const userConfigSchema = z.object({
-  /**
-   * Whether to send an automatic reminder before a lesson. Off by default: an
-   * app that starts notifying without being asked is one people mute.
-   */
-  lessonReminders: z.boolean().default(false),
+/**
+ * Where this tutor teaches online, if they do.
+ *
+ * One object rather than two loose fields, so that "a provider with no room" and
+ * "a room belonging to no provider" cannot be stored at all. Null means lessons
+ * are taught in a room, which stays the default.
+ */
+const meetingConfigSchema = z
+  .object({
+    provider: z.enum(MeetingProvider),
+    /**
+     * The tutor's own meeting room, for providers that reuse one. Null for
+     * providers that create a room per lesson.
+     */
+    roomUrl: z.string().max(500).nullable().default(null),
+  })
+  .superRefine((value, ctx) => {
+    const problem = meetingRoomProblem(value.provider, value.roomUrl);
+    if (problem !== null) {
+      ctx.addIssue({ code: 'custom', message: problem, path: ['roomUrl'] });
+    }
+  });
+
+export type MeetingConfig = z.infer<typeof meetingConfigSchema>;
+
+/**
+ * What each preference has to look like, with no opinion about what it starts
+ * as.
+ *
+ * Separate from the defaults below, and that separation is load-bearing rather
+ * than tidiness. A patch is built by making these optional, and a field that
+ * carried its own `.default()` would survive `.partial()` and be filled in for a
+ * client that never sent it — so "change the reminder time" would also switch
+ * reminders off, which is exactly the bug this shape prevents.
+ */
+const fieldTypes = {
+  /** Whether to send an automatic reminder before a lesson. */
+  lessonReminders: z.boolean(),
   /** How long before the lesson to send it. */
-  lessonReminderMinutes: z.coerce.number().int().min(5).max(1440).default(30),
+  lessonReminderMinutes: z.coerce.number().int().min(5).max(1440),
   /**
    * Whether this tutor marks work at all.
    *
@@ -33,13 +68,57 @@ const userConfigSchema = z.object({
    * genuinely differ: conversation practice has nothing to mark, exam prep is
    * mostly marking.
    */
-  gradesEnabled: z.boolean().default(true),
+  gradesEnabled: z.boolean(),
+  /** Where this tutor teaches online, or null for a room. */
+  meeting: meetingConfigSchema.nullable(),
+};
+
+/**
+ * What each preference is before anybody has chosen.
+ *
+ * Reminders off: an app that starts notifying without being asked is one people
+ * mute. Grading on: the gradebook is why most schools want a system at all, and
+ * a feature nobody can find is worse than one somebody switches off. No meeting:
+ * teaching in a room is still the ordinary case.
+ */
+const fieldDefaults = {
+  lessonReminders: false,
+  lessonReminderMinutes: 30,
+  gradesEnabled: true,
+  meeting: null,
+} as const;
+
+/**
+ * What a read produces. The meeting block falls back to "no meeting" rather than
+ * failing, because a column written by an older build — or by one that allowed a
+ * host this build does not — must not cost somebody their reminder and grading
+ * settings as collateral.
+ */
+const userConfigSchema = z.object({
+  lessonReminders: fieldTypes.lessonReminders.default(
+    fieldDefaults.lessonReminders,
+  ),
+  lessonReminderMinutes: fieldTypes.lessonReminderMinutes.default(
+    fieldDefaults.lessonReminderMinutes,
+  ),
+  gradesEnabled: fieldTypes.gradesEnabled.default(fieldDefaults.gradesEnabled),
+  meeting: fieldTypes.meeting
+    .catch(fieldDefaults.meeting)
+    .default(fieldDefaults.meeting),
 });
 
 export type UserConfig = z.infer<typeof userConfigSchema>;
 
-/** Every field optional — a client sends only what it is changing. */
-export const userConfigPatchSchema = userConfigSchema.partial();
+/**
+ * What a write must satisfy. Deliberately strict where the read is lenient: a
+ * request carrying an unusable meeting room is a mistake worth reporting, and
+ * quietly storing "no meeting" instead would look like the setting had saved.
+ *
+ * Every field optional — a client sends only what it is changing. `meeting: null`
+ * is how somebody goes back to teaching in a room, and is distinct from omitting
+ * the field, which changes nothing.
+ */
+export const userConfigPatchSchema = z.object(fieldTypes).partial();
 
 export type UserConfigPatch = z.infer<typeof userConfigPatchSchema>;
 
