@@ -88,7 +88,9 @@ describe('Report arithmetic', () => {
      * | -1    | Ada, Latin  | 60      | CANCELLED | nothing          |
      * | +3    | Ada, Latin  | 60      | SCHEDULED | nothing          |
      *
-     * So: 6 lessons total, 4 completed, 1 cancelled, 1 scheduled.
+     * So: 6 lessons total, 4 completed, 1 cancelled, 1 scheduled. Nothing here
+     * marks a register, so all four completed ones are unwritten — which is what
+     * the attendance assertions further down rely on as well.
      * Minutes taught = 90 + 45 + 60 + 30 = 225, which is 3.75 hours.
      * Latin = 90 + 45 + 30 = 165 over 3 lessons; Physics = 60 over 1.
      * Students taught = Ada and Ida = 2 (Ada appears in four lessons and in the
@@ -171,6 +173,7 @@ describe('Report arithmetic', () => {
         completed: 4,
         cancelled: 1,
         scheduled: 1,
+        unwritten: 4,
       });
     });
 
@@ -548,6 +551,181 @@ describe('Report arithmetic', () => {
       // in is a lie about their students.
       expect(attendance.rate).toBeNull();
       expect(attendance.marked).toBe(0);
+    });
+  });
+
+  describe('lessons nobody wrote up', () => {
+    /**
+     * The number that explains the attendance card.
+     *
+     * Confirming a lesson from the news feed used to move it to `completed`
+     * without marking anybody, so a tutor who works that way saw "12 taught" and
+     * "nothing marked" side by side and reasonably concluded the report was
+     * broken. The feed now writes the register for a one-to-one lesson, and this
+     * counts whatever still has none — the honest answer to "why is the rate
+     * empty", and the only one that stays true for lessons confirmed before the
+     * fix.
+     */
+    it('counts a completed lesson with an empty register', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+
+      await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-2),
+        status: LessonStatus.COMPLETED,
+      });
+      await makeMarkedLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-1),
+        attendance: AttendanceStatus.PRESENT,
+      });
+
+      const { lessons } = await summary(tutor);
+
+      expect(lessons.completed).toBe(2);
+      expect(lessons.unwritten).toBe(1);
+    });
+
+    it('leaves a lesson still to come out of it', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+
+      await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(3),
+        status: LessonStatus.SCHEDULED,
+      });
+
+      const { lessons } = await summary(tutor);
+
+      // Next week's timetable is not a backlog. Counting it would tell every
+      // tutor with a full diary that they are behind on their paperwork.
+      expect(lessons.scheduled).toBe(1);
+      expect(lessons.unwritten).toBe(0);
+    });
+
+    it('leaves a cancelled lesson out of it', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+
+      await makeLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-1),
+        status: LessonStatus.CANCELLED,
+      });
+
+      const { lessons } = await summary(tutor);
+
+      // A lesson that did not happen has nothing to record about it.
+      expect(lessons.cancelled).toBe(1);
+      expect(lessons.unwritten).toBe(0);
+    });
+
+    it('counts a group lesson once, however many members went unmarked', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const ada = await makeStudent(test, { school, tutor, name: 'Ada' });
+      const ida = await makeStudent(test, { school, tutor, name: 'Ida' });
+      const group = await makeGroup(test, {
+        school,
+        tutor,
+        members: [ada, ida],
+      });
+
+      await makeGroupLesson(test, {
+        school,
+        tutor,
+        group,
+        startsAt: at(-1),
+        status: LessonStatus.COMPLETED,
+      });
+
+      const { lessons } = await summary(tutor);
+
+      // Lessons, not people: this number sits beside "completed" and has to be
+      // read against it.
+      expect(lessons.unwritten).toBe(1);
+    });
+
+    it('stops counting a group lesson as soon as one member is marked', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const ada = await makeStudent(test, { school, tutor, name: 'Ada' });
+      const ida = await makeStudent(test, { school, tutor, name: 'Ida' });
+      const group = await makeGroup(test, {
+        school,
+        tutor,
+        members: [ada, ida],
+      });
+      const lesson = await makeGroupLesson(test, {
+        school,
+        tutor,
+        group,
+        startsAt: at(-1),
+        status: LessonStatus.COMPLETED,
+      });
+
+      await test.prisma.lessonAttendance.create({
+        data: {
+          lessonId: lesson.id,
+          studentId: ada.id,
+          status: AttendanceStatus.PRESENT,
+        },
+      });
+
+      // A half-filled register is a written-up lesson with a gap in it, not an
+      // untouched one. Saying otherwise would nag about a lesson the tutor has
+      // already dealt with, which is how a warning gets ignored.
+      const { lessons, attendance } = await summary(tutor);
+
+      expect(lessons.unwritten).toBe(0);
+      expect(attendance.marked).toBe(1);
+    });
+
+    it('never exceeds the lessons it is counted from', async () => {
+      const school = await makeSchool(test);
+      const tutor = await makeUser(test, { school });
+      const student = await makeStudent(test, { school, tutor });
+
+      for (const day of [-4, -3, -2]) {
+        await makeLesson(test, {
+          school,
+          tutor,
+          student,
+          startsAt: at(day),
+          status: LessonStatus.COMPLETED,
+        });
+      }
+      await makeMarkedLesson(test, {
+        school,
+        tutor,
+        student,
+        startsAt: at(-1),
+        attendance: AttendanceStatus.LATE,
+      });
+
+      // Typed here because this is the one assertion that compares two of the
+      // response's own numbers rather than a number against a literal, and an
+      // untyped body would let both sides be anything.
+      const lessons = (await summary(tutor)).lessons as {
+        completed: number;
+        unwritten: number;
+      };
+
+      expect(lessons.unwritten).toBeLessThanOrEqual(lessons.completed);
+      expect(lessons.unwritten).toBe(3);
     });
   });
 

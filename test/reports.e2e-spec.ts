@@ -84,6 +84,9 @@ describe('Reports', () => {
         completed: 1,
         cancelled: 1,
         scheduled: 1,
+        // Nobody was marked, which is the state a lesson confirmed from the news
+        // feed used to be left in for good.
+        unwritten: 1,
       });
       // The number somebody bills from: only the lesson that happened.
       expect(body.minutesTaught).toBe(90);

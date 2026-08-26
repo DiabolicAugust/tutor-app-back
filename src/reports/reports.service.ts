@@ -57,6 +57,16 @@ export type Report = {
     completed: number;
     cancelled: number;
     scheduled: number;
+    /**
+     * Lessons that happened with nobody marked in the register.
+     *
+     * Here because it is the answer to the question the attendance card
+     * otherwise raises: a tutor who confirms lessons from the news feed moves
+     * them to `completed` without saying who was there, so the rate is computed
+     * over a fraction of their work — or over nothing at all. Without this
+     * number the screen looks broken; with it, it says what is missing.
+     */
+    unwritten: number;
   };
   /**
    * Minutes actually taught — completed lessons only.
@@ -78,6 +88,8 @@ export type Report = {
 /** The lesson columns a report needs, and no more. */
 type ReportLesson = {
   status: LessonStatus;
+  /** How many register rows the lesson has — nought means nobody wrote it up. */
+  _count: { attendances: number };
   durationMinutes: number;
   subjectId: string | null;
   tutorId: string;
@@ -109,6 +121,7 @@ export class ReportsService {
         studentId: true,
         groupId: true,
         subject: { select: { name: true } },
+        _count: { select: { attendances: true } },
       },
     });
 
@@ -149,6 +162,11 @@ export class ReportsService {
         completed: completed.length,
         cancelled: this.countWith(lessons, LessonStatus.CANCELLED),
         scheduled: this.countWith(lessons, LessonStatus.SCHEDULED),
+        // Counted over completed lessons rather than all of them: a lesson still
+        // in the schedule has nothing to write up yet, and counting it would
+        // turn next week's timetable into a backlog.
+        unwritten: completed.filter((lesson) => lesson._count.attendances === 0)
+          .length,
       },
       minutesTaught: completed.reduce(
         (total, lesson) => total + lesson.durationMinutes,
