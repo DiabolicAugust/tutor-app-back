@@ -4,6 +4,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,6 +19,7 @@ import {
 import type { AuthUserPayload } from '../auth/auth.types';
 import type { Env } from '../config/env';
 import { MailService } from '../mail/mail.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { AcceptInvitationDto } from './dto/accept-invitation.dto';
 import type { InviteTutorDto } from './dto/invite-tutor.dto';
@@ -26,9 +28,12 @@ const HOUR_MS = 60 * 60 * 1000;
 
 @Injectable()
 export class InvitationsService {
+  private readonly logger = new Logger(InvitationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
+    private readonly notifications: NotificationsService,
     private readonly sessions: SessionsService<User, AuthUserPayload>,
     private readonly credentials: CredentialsService,
     private readonly config: ConfigService<Env, true>,
@@ -69,25 +74,61 @@ export class InvitationsService {
       include: { school: { select: { name: true } } },
     });
 
-    await this.mail.sendInvitation({
-      to: email,
-      schoolName: invitation.school.name,
-      invitedByName: admin.name,
-      acceptUrl: `${this.config.get('INVITE_URL_BASE', { infer: true })}/${token}`,
-      expiresAt,
-    });
+    const acceptUrl = this.linkFor(token);
 
-    return this.toPublic(invitation);
+    // Mailed *and* returned. Two channels for one token, because email is the
+    // channel that can fail quietly: an address typed wrong, a domain not yet
+    // verified, a spam folder. The admin gets the same link to send however they
+    // like — a messenger, in person — and neither path is privileged.
+    //
+    // Attempted, not required. The invitation is already saved, so a mail failure
+    // must not undo it and leave the admin with nothing; it is logged and the link
+    // still comes back.
+    const mailed = await this.mail
+      .sendInvitation({
+        to: email,
+        schoolName: invitation.school.name,
+        invitedByName: admin.name,
+        acceptUrl,
+        expiresAt,
+      })
+      .then(() => true)
+      .catch((cause: unknown) => {
+        this.logger.error(
+          `Invitation for ${email} saved but not emailed: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+        );
+        return false;
+      });
+
+    return { ...this.toPublic(invitation), acceptUrl, mailed };
   }
 
-  /** Invitations the admin has sent, newest first. */
+  /**
+   * Invitations the admin has sent, newest first.
+   *
+   * Pending ones carry their link, so "send it again myself" does not mean
+   * re-inviting and invalidating the link already in somebody's chat. Accepted
+   * and expired ones do not: there is nothing left to send, and a token that no
+   * longer works is only something to paste by mistake.
+   *
+   * Safe to include here because this route requires the capability to invite in
+   * the first place — the audience that may read the link is the audience that
+   * created it.
+   */
   async list(admin: User) {
     const invitations = await this.prisma.invitation.findMany({
       where: { schoolId: admin.schoolId },
       orderBy: { createdAt: 'desc' },
     });
 
-    return invitations.map((invitation) => this.toPublic(invitation));
+    return invitations.map((invitation) => {
+      const shown = this.toPublic(invitation);
+      return shown.status === 'pending'
+        ? { ...shown, acceptUrl: this.linkFor(invitation.token) }
+        : shown;
+    });
   }
 
   async revoke(admin: User, id: string) {
@@ -145,6 +186,16 @@ export class InvitationsService {
       });
     });
 
+    // After the account exists, and unable to undo it. Somebody who has just
+    // registered is registered whether or not their new colleagues heard about it.
+    await this.notifications.tutorJoined(user).catch((cause: unknown) => {
+      this.logger.error(
+        `${user.email} joined but the school was not told: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+      );
+    });
+
     return await this.sessions.issue(user);
   }
 
@@ -170,7 +221,18 @@ export class InvitationsService {
     return invitation;
   }
 
-  /** Never returns the token — that belongs only in the email. */
+  /**
+   * The link that opens the app on the registration form.
+   *
+   * One place, because it is now built for two audiences — the email and the
+   * admin's own share sheet — and two spellings of the same URL is how one of
+   * them ends up pointing somewhere that no longer exists.
+   */
+  private linkFor(token: string): string {
+    return `${this.config.get('INVITE_URL_BASE', { infer: true })}/${token}`;
+  }
+
+  /** Never returns the token; callers that need the link ask `linkFor`. */
   private toPublic(invitation: {
     id: string;
     email: string;

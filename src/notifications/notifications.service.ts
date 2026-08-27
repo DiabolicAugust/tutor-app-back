@@ -101,6 +101,51 @@ export class NotificationsService {
   }
 
   /**
+   * Tells the school that somebody has joined it.
+   *
+   * Called when an invitation is accepted — see `InvitationsService.accept` —
+   * which is the moment the school gains a colleague with access to its students.
+   * Everybody who was already there is told, because that is a fact about the
+   * school rather than about whoever did the inviting: an admin who invited three
+   * people wants to know which one arrived, and the other tutors want to know who
+   * the new name on the calendar belongs to.
+   *
+   * The newcomer is excluded. The announcement includes its own author for a
+   * reason that does not apply here — an author needs to see that their message
+   * went out, while somebody who has just filled in a registration form does not
+   * need telling that they did.
+   *
+   * **Stored, not pushed**, and that is deliberate rather than unfinished. A push
+   * is rendered by the OS while the app is not running, so its text has to be
+   * composed here — and the server cannot know which language the reader wants.
+   * The announcement gets away with pushing because its body is words a person
+   * typed, already in the language they meant. This has no such words: only a
+   * name and a fact, which the app renders in the reader's own language from the
+   * kind. A colleague joining is also not something worth a chime.
+   */
+  async tutorJoined(newcomer: User): Promise<number> {
+    const recipients = await this.prisma.user.findMany({
+      where: { schoolId: newcomer.schoolId, id: { not: newcomer.id } },
+      select: { id: true },
+    });
+
+    if (recipients.length === 0) return 0;
+
+    await this.prisma.notification.createMany({
+      data: recipients.map((recipient) => ({
+        kind: NotificationKind.TUTOR_JOINED,
+        // The name only. What they teach is not known yet — the registration form
+        // asks for a name and a password — and inventing a subject here would put
+        // a guess in front of the whole school.
+        data: { personName: newcomer.name },
+        recipientId: recipient.id,
+      })),
+    });
+
+    return recipients.length;
+  }
+
+  /**
    * Pushes an announcement to every device its recipients have registered.
    *
    * After the rows, never instead of them, and never able to fail the request:

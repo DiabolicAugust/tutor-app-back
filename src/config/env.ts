@@ -27,15 +27,46 @@ const envSchema = z.object({
    */
   CORS_ORIGINS: z.string().optional(),
   /**
-   * `log` writes emails to the server log instead of sending them — the only
-   * supported value until a provider is wired up.
+   * How email leaves the server.
+   *
+   * `log` writes the message — invitation link included — to the server log and
+   * sends nothing, which is what makes the flow testable with no provider account
+   * and no secrets. `resend` sends for real.
    */
-  MAIL_TRANSPORT: z.enum(['log']).default('log'),
+  MAIL_TRANSPORT: z.enum(['log', 'resend']).default('log'),
+  /** Required when `MAIL_TRANSPORT=resend`; see the check below. */
+  RESEND_API_KEY: z.string().optional(),
   /**
-   * Base for invitation links. The app's scheme, so tapping the link in a phone
-   * mail client opens the app rather than a browser.
+   * The `From` of every message, as `Name <address@domain>`.
+   *
+   * Required when sending for real, and the domain has to be one verified with
+   * the provider — DKIM and SPF are records on a domain you own, so this cannot
+   * be an address at somebody else's. Required when `MAIL_TRANSPORT=resend`.
+   */
+  MAIL_FROM: z.string().optional(),
+  /**
+   * Base for the invitation link that gets *sent* — by email and by the admin's
+   * own share sheet.
+   *
+   * Should be `https://<this host>/invite` in production, which is a page this
+   * server serves whose only job is to hand off to the app. An https link is
+   * what survives being pasted into a chat: a custom scheme is not a web
+   * address, so a messenger has no reason to make it tappable and a device
+   * without the app fails with nothing to explain itself.
+   *
+   * Defaults to the scheme anyway, because that is the right thing on a
+   * development machine — no public host, and a link that opens the emulator's
+   * app straight from the server log.
    */
   INVITE_URL_BASE: z.string().default('foxacademy://invite'),
+  /**
+   * What the invitation page hands off to. The app's own scheme.
+   *
+   * Separate from `INVITE_URL_BASE` because they are two different links now: one
+   * is what gets sent, the other is what the sent one leads to. Folding them into
+   * one variable would mean the page linking to itself.
+   */
+  APP_SCHEME_URL_BASE: z.string().default('foxacademy://invite'),
   /** How long an invitation stays valid. */
   INVITE_TTL_HOURS: z.coerce.number().int().positive().default(72),
   /** Where support requests are forwarded once a mail provider exists. */
@@ -168,6 +199,14 @@ const envSchema = z.object({
  * *boot* rather than at first use, because the alternative is a server that
  * starts happily and then fails the first upload somebody actually cares about.
  */
+/**
+ * Required to send email for real, for the same reason as `S3_REQUIRED`: a server
+ * that boots claiming it can send and then cannot is worse than one that refuses
+ * to start. An invitation that silently goes nowhere looks like the invitee
+ * ignoring it.
+ */
+const RESEND_REQUIRED = ['RESEND_API_KEY', 'MAIL_FROM'] as const;
+
 const S3_REQUIRED = [
   'S3_BUCKET',
   'S3_ACCESS_KEY_ID',
@@ -238,6 +277,20 @@ export function validateEnv(raw: Record<string, unknown>): Env {
         '  - FCM_SERVICE_ACCOUNT: required when PUSH_TRANSPORT=fcm',
       ].join('\n'),
     );
+  }
+
+  if (result.data.MAIL_TRANSPORT === 'resend') {
+    const missing = RESEND_REQUIRED.filter((key) => !result.data[key]);
+    if (missing.length > 0) {
+      throw new Error(
+        [
+          'Invalid environment configuration:',
+          ...missing.map(
+            (key) => `  - ${key}: required when MAIL_TRANSPORT=resend`,
+          ),
+        ].join('\n'),
+      );
+    }
   }
 
   if (result.data.STORAGE_DRIVER === 's3') {

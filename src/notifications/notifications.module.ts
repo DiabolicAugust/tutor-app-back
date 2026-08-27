@@ -8,5 +8,8 @@ import { NotificationsService } from './notifications.service';
   imports: [PushModule],
   controllers: [NotificationsController],
   providers: [NotificationsService],
+  // Exported because joining a school is news, and the thing that knows somebody
+  // has joined is `InvitationsModule`.
+  exports: [NotificationsService],
 })
 export class NotificationsModule {}

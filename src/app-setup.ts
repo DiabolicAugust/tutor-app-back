@@ -21,7 +21,14 @@ export function configureApp(app: INestApplication): INestApplication {
   const config = app.get(ConfigService<Env, true>);
   const isProduction = config.get('NODE_ENV', { infer: true }) === 'production';
 
-  app.setGlobalPrefix('api');
+  /**
+   * Everything is under `/api`, except the one page this process serves.
+   *
+   * The invitation link is pasted into chats and mail clients by people, so it
+   * has to read like a link to a thing rather than a call to an interface —
+   * `/invite/<token>`, not `/api/invite/<token>`. See `InvitePageController`.
+   */
+  app.setGlobalPrefix('api', { exclude: ['invite/:token'] });
 
   /**
    * Trust the platform's proxy for the client address.
@@ -55,9 +62,9 @@ export function configureApp(app: INestApplication): INestApplication {
    * Response headers that cost nothing and remove whole classes of problem.
    *
    * `contentSecurityPolicy` is off: this process serves JSON and file downloads,
-   * never a page, so there is no document for a policy to govern — and a default
-   * policy on an API only shows up in the browser console of whoever is
-   * debugging it. `crossOriginResourcePolicy` is relaxed to `cross-origin`
+   * and exactly one page — which sets its own, tighter policy on its own response
+   * rather than making every JSON reply carry one. A default policy on an API only
+   * shows up in the browser console of whoever is debugging it. `crossOriginResourcePolicy` is relaxed to `cross-origin`
    * because the web build is served from a different origin than the API and
    * would otherwise be unable to read its own downloads.
    */
